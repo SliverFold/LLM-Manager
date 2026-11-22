@@ -12,6 +12,23 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async headers() {
+    return [
+      {
+        // Everything else (HTML pages, API) revalidates via ETag so
+        // rebuilds are visible without a hard refresh (was a server.js
+        // patch; headers() survives standalone rebuilds)
+        source: '/:path*',
+        headers: [{ key: 'Cache-Control', value: 'no-cache' }],
+      },
+      {
+        // Content-hashed assets keep the 1-year immutable cache.
+        // Listed last: when several rules match, the later one wins.
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

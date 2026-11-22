@@ -1,0 +1,17 @@
+[Unit]
+Description=LLM Model Manager Frontend (Next.js :3000)
+After=network.target vllm-manager-backend.service
+Requires=vllm-manager-backend.service
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/frontend/.next/standalone
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+Environment="HOSTNAME=0.0.0.0"
+ExecStart=/usr/bin/node @REPO@/frontend/.next/standalone/server.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

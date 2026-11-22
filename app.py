@@ -1,26 +1,70 @@
 #!/usr/bin/env python3
 """
-vLLM Model Manager
-一个用于管理和监控vLLM模型服务的Web管理系统
+LLM Model Manager
+A web management system for managing and monitoring LLM model services
 """
 
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 import subprocess
 import os
+import glob
+import shutil
 import psutil
 import json
+import time
+import re
+import urllib.request
 from datetime import datetime
 from pathlib import Path
+
+from loaders import all_loaders, get_loader
+from loaders.base import next_free_port, make_service_key
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)
 
-# 从配置文件加载服务配置
+# Per-service state for computing live token rates (rolling window of samples)
+from collections import deque
+VLLM_STATE = {}
+
+def _parse_prom(text):
+    """Parse Prometheus text format. Returns (scalars, buckets):
+    scalars = {name: value} and {name: {'sum': x, 'count': y}} for histograms;
+    buckets = {name: [(le, count), ...]} for histogram _bucket lines."""
+    out = {}
+    buckets = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        m = re.match(r'^([a-zA-Z_][\w:]*)(?:\{([^}]*?)\})? (-?[0-9a-fA-F.]*(?:[eE][+-]?\d+)?)$', line)
+        if not m:
+            continue
+        name, labels, raw = m.groups()
+        try:
+            val = float(raw)
+        except ValueError:
+            continue
+        if name.endswith('_bucket'):
+            base = name[:-7]
+            le_m = re.search(r'le="([^"]+)"', labels or '')
+            if le_m:
+                le = float('inf') if le_m.group(1) == '+Inf' else float(le_m.group(1))
+                buckets.setdefault(base, []).append((le, val))
+        elif name.endswith('_sum'):
+            out.setdefault(name[:-4], {})['sum'] = val
+        elif name.endswith('_count'):
+            out.setdefault(name[:-6], {})['count'] = val
+        else:
+            out[name] = val
+    return out, buckets
+
+# Load service config from the config file
 CONFIG_FILE = Path(__file__).parent / 'config' / 'services.json'
 
 def load_services_config():
-    """加载服务配置"""
+    """Load the service configuration"""
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -28,11 +72,89 @@ def load_services_config():
 
 SERVICES = load_services_config()
 
-def get_gpu_info():
-    """获取GPU信息"""
+def _rocm_smi():
+    """Resolve rocm-smi to an absolute path — systemd user services get a minimal PATH (/usr/bin:/bin) that lacks /opt/rocm/bin."""
+    p = shutil.which('rocm-smi')
+    if p:
+        return p
+    for cand in ('/opt/rocm/bin/rocm-smi', '/usr/bin/rocm-smi', '/usr/local/bin/rocm-smi'):
+        if os.path.exists(cand):
+            return cand
+    return 'rocm-smi'
+
+def _gpu_metrics_rocm():
+    """AMD: combined rocm-smi JSON (util/temp/power/VRAM). Returns dict card -> metrics or None."""
     try:
         result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit',
+            [_rocm_smi(), '--showuse', '--showtemp', '--showpower', '--showmeminfo', 'vram', '--showclocks', '--json'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except Exception as e:
+        print(f"rocm-smi metrics failed: {e}")
+    return None
+
+def _gpu_names_rocm():
+    try:
+        result = subprocess.run(
+            [_rocm_smi(), '--showproductname', '--json'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except Exception as e:
+        print(f"rocm-smi names failed: {e}")
+    return {}
+
+def get_gpu_info():
+    """Get GPU info (AMD rocm-smi first, nvidia-smi as fallback)"""
+    metrics = _gpu_metrics_rocm()
+    if metrics:
+        names = _gpu_names_rocm()
+        gpus = []
+        for card, m in metrics.items():
+            def f(key, default=0.0):
+                try:
+                    return float(m.get(key, default))
+                except (TypeError, ValueError):
+                    return default
+            # sclk = shader/core clock (what the kernel amdgpu hwmon freq1 + KDE system
+            # monitor report; fclk is the fabric clock — a different, lower domain on
+            # gfx1201/R9700, so it disagreed with the system monitor)
+            try:
+                match = re.search(r'\((\d+)Mhz\)', str(m.get('sclk clock speed:', '')))
+                clock_mhz = float(match.group(1)) if match else 0.0
+            except (ValueError, TypeError):
+                clock_mhz = 0.0
+            # mclk = VRAM memory clock
+            try:
+                mmatch = re.search(r'\((\d+)Mhz\)', str(m.get('mclk clock speed:', '')))
+                mem_clock_mhz = float(mmatch.group(1)) if mmatch else 0.0
+            except (ValueError, TypeError):
+                mem_clock_mhz = 0.0
+            try:
+                idx = int(card.replace('card', ''))
+            except ValueError:
+                idx = len(gpus)
+            gpus.append({
+                'index': idx,
+                'name': names.get(card, {}).get('Card Series', f'AMD GPU {idx}'),
+                'utilization': f('GPU use (%)'),
+                'memory_used': f('VRAM Total Used Memory (B)') / 1024 ** 2,
+                'memory_total': f('VRAM Total Memory (B)') / 1024 ** 2,
+                'temperature': f('Temperature (Sensor junction) (C)'),  # hotspot
+                'memory_temperature': f('Temperature (Sensor memory) (C)'),  # VRAM
+                'power_draw': f('Average Graphics Package Power (W)'),
+                'power_limit': 0,
+                'clock_mhz': clock_mhz,
+                'mem_clock_mhz': mem_clock_mhz
+            })
+        if gpus:
+            return gpus
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,clocks.graphics,clocks.mem',
              '--format=csv,noheader,nounits'],
             capture_output=True,
             text=True,
@@ -46,7 +168,7 @@ def get_gpu_info():
         for line in result.stdout.strip().split('\n'):
             if line.strip():
                 parts = [p.strip() for p in line.split(',')]
-                if len(parts) >= 8:
+                if len(parts) >= 10:
                     gpus.append({
                         'index': int(parts[0]),
                         'name': parts[1],
@@ -54,16 +176,37 @@ def get_gpu_info():
                         'memory_used': float(parts[3]) if parts[3] != '[N/A]' else 0,
                         'memory_total': float(parts[4]) if parts[4] != '[N/A]' else 0,
                         'temperature': float(parts[5]) if parts[5] != '[N/A]' else 0,
+                        'memory_temperature': 0,  # no separate VRAM sensor on NVIDIA
                         'power_draw': float(parts[6]) if parts[6] != '[N/A]' else 0,
-                        'power_limit': float(parts[7]) if parts[7] != '[N/A]' else 0
+                        'power_limit': float(parts[7]) if parts[7] != '[N/A]' else 0,
+                        'clock_mhz': float(parts[8]) if parts[8] != '[N/A]' else 0,
+                        'mem_clock_mhz': float(parts[9]) if parts[9] != '[N/A]' else 0
                     })
         return gpus
     except Exception as e:
-        print(f"获取GPU信息失败: {e}")
+        print(f"Failed to get GPU info: {e}")
         return []
 
 def get_process_gpu_usage(pid):
-    """获取特定进程的GPU使用情况"""
+    """Get GPU usage for a specific process (AMD: rocm-smi --showpids, nvidia-smi as fallback)"""
+    try:
+        result = subprocess.run(
+            [_rocm_smi(), '--showpids'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                parts = [p.strip() for p in line.split('\t')]
+                if len(parts) >= 4 and parts[0] == str(pid):
+                    try:
+                        return float(parts[3]) / 1024 ** 2  # VRAM USED, bytes -> MB
+                    except ValueError:
+                        return None
+            return 0
+    except Exception as e:
+        print(f"rocm-smi pids failed: {e}")
     try:
         result = subprocess.run(
             ['nvidia-smi', '--query-compute-apps=pid,used_memory', '--format=csv,noheader,nounits'],
@@ -82,15 +225,15 @@ def get_process_gpu_usage(pid):
                     return float(parts[1])
         return None
     except Exception as e:
-        print(f"获取进程GPU使用失败: {e}")
+        print(f"Failed to get process GPU usage: {e}")
         return None
 
 def check_service_status(service_key):
-    """检查服务状态"""
+    """Check service status"""
     service = SERVICES[service_key]
 
     try:
-        # 检查进程是否运行
+        # Check if the process is running
         result = subprocess.run(
             ['pgrep', '-f', service['process_pattern']],
             capture_output=True,
@@ -100,22 +243,23 @@ def check_service_status(service_key):
         if result.returncode == 0 and result.stdout.strip():
             pid = int(result.stdout.strip().split('\n')[0])
 
-            # 获取进程信息
+            # Get process info
             try:
                 proc = psutil.Process(pid)
                 cpu_percent = proc.cpu_percent(interval=0.1)
                 memory_info = proc.memory_info()
                 memory_mb = memory_info.rss / 1024 / 1024
 
-                # 检查端口是否可访问
+                # Check if the port is accessible
+                port = service.get('port', service.get('default_params', {}).get('port', 8000))
                 port_check = subprocess.run(
-                    ['curl', '-s', f'http://localhost:{service["port"]}/health'],
+                    ['curl', '-s', f'http://localhost:{port}/health'],
                     capture_output=True,
                     timeout=2
                 )
                 port_accessible = port_check.returncode == 0
 
-                # 获取该进程的GPU使用情况
+                # Get this process's GPU usage
                 gpu_memory = get_process_gpu_usage(pid)
 
                 return {
@@ -125,7 +269,8 @@ def check_service_status(service_key):
                     'memory_mb': memory_mb,
                     'port_accessible': port_accessible,
                     'gpu_memory_mb': gpu_memory,
-                    'uptime': datetime.fromtimestamp(proc.create_time()).strftime('%Y-%m-%d %H:%M:%S')
+                    'uptime': datetime.fromtimestamp(proc.create_time()).strftime('%Y-%m-%d %H:%M:%S'),
+                    'uptime_seconds': int(time.time() - proc.create_time())
                 }
             except psutil.NoSuchProcess:
                 return {'status': 'stopped'}
@@ -136,9 +281,9 @@ def check_service_status(service_key):
 
 @app.route('/')
 def index():
-    """API信息"""
+    """API info"""
     return jsonify({
-        'name': 'vLLM Model Manager API',
+        'name': 'LLM Model Manager API',
         'version': '1.0.0',
         'endpoints': {
             'services': '/api/services',
@@ -152,13 +297,13 @@ def index():
     })
 
 def save_services_config():
-    """保存服务配置到文件"""
+    """Save the service config to file"""
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(SERVICES, f, indent=4, ensure_ascii=False)
 
 @app.route('/api/services')
 def get_services():
-    """获取所有服务状态"""
+    """Get status of all services"""
     services_status = {}
 
     for key, service in SERVICES.items():
@@ -169,6 +314,7 @@ def get_services():
             'port': default_params.get('port', service.get('port', 8000)),
             'gpus': default_params.get('gpus', service.get('gpus', [])),
             'default_params': default_params,
+            'loader': service.get('loader'),
             **status
         }
 
@@ -176,15 +322,15 @@ def get_services():
 
 @app.route('/api/gpu')
 def get_gpu():
-    """获取GPU信息"""
+    """Get GPU info"""
     gpu_info = get_gpu_info()
     return jsonify(gpu_info)
 
 @app.route('/api/service/<service_key>/config', methods=['GET'])
 def get_service_config(service_key):
-    """获取服务默认配置"""
+    """Get a service's default config"""
     if service_key not in SERVICES:
-        return jsonify({'success': False, 'message': '服务不存在'}), 404
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
 
     service = SERVICES[service_key]
     default_params = service.get('default_params', {
@@ -205,11 +351,11 @@ def get_service_config(service_key):
 
 @app.route('/api/service/<service_key>/config', methods=['POST'])
 def save_service_config(service_key):
-    """保存服务默认配置"""
+    """Save a service's default config"""
     if service_key not in SERVICES:
-        return jsonify({'success': False, 'message': '服务不存在'}), 404
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
 
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     params = data.get('params', {})
 
     if params:
@@ -223,71 +369,85 @@ def save_service_config(service_key):
         }
         save_services_config()
 
-    return jsonify({'success': True, 'message': '配置已保存'})
+    return jsonify({'success': True, 'message': 'Configuration saved'})
 
 @app.route('/api/service/<service_key>/start', methods=['POST'])
 def start_service(service_key):
-    """启动服务（支持动态参数）"""
+    """Start a service (supports dynamic parameters)"""
     if service_key not in SERVICES:
-        return jsonify({'success': False, 'message': '服务不存在'}), 404
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
 
     service = SERVICES[service_key]
 
-    # 检查是否已经运行
+    # Check if it is already running
     status = check_service_status(service_key)
     if status['status'] == 'running':
-        return jsonify({'success': False, 'message': '服务已在运行中'})
+        return jsonify({'success': False, 'message': 'Service already running'})
 
-    # 获取请求参数，若无则使用默认参数
-    data = request.get_json() or {}
+    # Get request parameters, falling back to defaults
+    data = request.get_json(silent=True) or {}
     default_params = service.get('default_params', {})
 
-    # 参数验证
+    # Parameter validation
     VALID_DTYPES = {'auto', 'float16', 'bfloat16', 'float32'}
 
     gpus = data.get('gpus', default_params.get('gpus', [0]))
     if not isinstance(gpus, list) or not all(isinstance(g, int) and 0 <= g < 16 for g in gpus):
-        return jsonify({'success': False, 'message': 'GPU参数无效'}), 400
+        return jsonify({'success': False, 'message': 'Invalid GPU parameter'}), 400
 
     port = int(data.get('port', default_params.get('port', 8000)))
     if not (1024 <= port <= 65535):
-        return jsonify({'success': False, 'message': '端口范围无效 (1024-65535)'}), 400
+        return jsonify({'success': False, 'message': 'Port out of range (1024-65535)'}), 400
 
     tensor_parallel_size = int(data.get('tensorParallelSize', data.get('tensor_parallel_size', default_params.get('tensor_parallel_size', 1))))
     if not (1 <= tensor_parallel_size <= 16):
-        return jsonify({'success': False, 'message': 'tensor_parallel_size 范围无效 (1-16)'}), 400
+        return jsonify({'success': False, 'message': 'tensor_parallel_size out of range (1-16)'}), 400
 
     gpu_memory_utilization = float(data.get('gpuUtil', data.get('gpu_memory_utilization', default_params.get('gpu_memory_utilization', 0.9))))
     if not (0.1 <= gpu_memory_utilization <= 1.0):
-        return jsonify({'success': False, 'message': 'gpu_memory_utilization 范围无效 (0.1-1.0)'}), 400
+        return jsonify({'success': False, 'message': 'gpu_memory_utilization out of range (0.1-1.0)'}), 400
 
     max_model_len = int(data.get('maxModelLen', data.get('max_model_len', default_params.get('max_model_len', 4096))))
-    if not (256 <= max_model_len <= 131072):
-        return jsonify({'success': False, 'message': 'max_model_len 范围无效 (256-131072)'}), 400
+    if not (256 <= max_model_len <= 262144):
+        return jsonify({'success': False, 'message': 'max_model_len out of range (256-262144)'}), 400
 
     dtype = str(data.get('dtype', default_params.get('dtype', 'auto')))
     if dtype not in VALID_DTYPES:
-        return jsonify({'success': False, 'message': f'dtype 无效，必须是 {VALID_DTYPES} 之一'}), 400
+        return jsonify({'success': False, 'message': f'Invalid dtype, must be one of {VALID_DTYPES}'}), 400
+
+    parallel_mode = str(data.get('parallelMode', data.get('parallel_mode', default_params.get('parallel_mode', 'tp'))))
+    if parallel_mode not in {'tp', 'pp'}:
+        return jsonify({'success': False, 'message': 'parallel_mode must be "tp" or "pp"'}), 400
 
     save_as_default = data.get('saveAsDefault', False)
 
-    # 保存为默认配置
+    # Save as default config — only persist the fields that apply to this service's loader,
+    # so a non-vLLM service (ollama/lmstudio/llama_cpp) doesn't get vLLM fields
+    # (tensor_parallel_size, dtype, ...) baked into its default_params.
     if save_as_default:
-        SERVICES[service_key]['default_params'] = {
-            'gpus': gpus,
-            'port': port,
-            'tensor_parallel_size': tensor_parallel_size,
-            'gpu_memory_utilization': gpu_memory_utilization,
-            'max_model_len': max_model_len,
-            'dtype': dtype
-        }
+        loader_key = service.get('loader') or 'vllm'
+        new_params = {'gpus': gpus, 'port': port}
+        if loader_key == 'vllm':
+            new_params.update({
+                'tensor_parallel_size': tensor_parallel_size,
+                'gpu_memory_utilization': gpu_memory_utilization,
+                'max_model_len': max_model_len,
+                'dtype': dtype,
+            })
+            if parallel_mode and (service.get('default_params', {}) or {}).get('parallel_mode') is not None:
+                new_params['parallel_mode'] = parallel_mode
+        # preserve any loader-specific fields already in default_params (e.g. context_length)
+        for k, v in (service.get('default_params', {}) or {}).items():
+            if k not in new_params:
+                new_params[k] = v
+        SERVICES[service_key]['default_params'] = new_params
         save_services_config()
 
-    # 检查是否有model_path（新配置格式）
+    # Check if there is a model_path (new config format)
     model_path = service.get('model_path')
 
     if model_path:
-        # 动态构建vLLM启动命令
+        # Build the vLLM start command dynamically
         cuda_devices = ','.join(map(str, gpus))
         log_file = service.get('log_file', f'/tmp/vllm_{service_key}.log')
         extra_args = service.get('extra_args', '')
@@ -305,7 +465,7 @@ CUDA_VISIBLE_DEVICES={cuda_devices} nohup vllm serve {model_path} \
     --dtype {dtype} \
     {extra_args} \
     > {log_file} 2>&1 &
-echo "服务启动中，日志: {log_file}"
+echo "Starting service, log: {log_file}"
 '''
         try:
             result = subprocess.run(
@@ -316,7 +476,7 @@ echo "服务启动中，日志: {log_file}"
             )
             return jsonify({
                 'success': True,
-                'message': '服务启动成功',
+                'message': 'Service started',
                 'output': result.stdout,
                 'params': {
                     'gpus': gpus,
@@ -328,47 +488,58 @@ echo "服务启动中，日志: {log_file}"
                 }
             })
         except subprocess.TimeoutExpired:
-            return jsonify({'success': True, 'message': '服务正在后台启动'})
+            return jsonify({'success': True, 'message': 'Service is starting in the background'})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)})
     else:
-        # 兼容旧配置：使用start_script
+        # Backward compat: use start_script
         start_script = service.get('start_script')
         if not start_script:
-            return jsonify({'success': False, 'message': '服务配置缺少 model_path 或 start_script'})
+            return jsonify({'success': False, 'message': 'Service config missing model_path or start_script'})
 
         try:
+            env = os.environ.copy()
+            # The manager's own environment (systemd unit) carries PORT=9000/HOST=0.0.0.0
+            # for the Flask app. Start scripts use ${PORT:-8000}-style defaults, so an
+            # inherited PORT would make vLLM try to bind the manager's port and crash
+            # with "Address already in use". Strip ambient PORT/HOST and pass the
+            # service's port explicitly instead.
+            env.pop('PORT', None)
+            env.pop('HOST', None)
+            env['PARALLEL_MODE'] = parallel_mode
+            env['PORT'] = str(port)
             result = subprocess.run(
                 ['bash', start_script],
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=300,
+                env=env
             )
 
             if result.returncode == 0:
-                return jsonify({'success': True, 'message': '服务启动成功', 'output': result.stdout})
+                return jsonify({'success': True, 'message': 'Service started', 'output': result.stdout})
             else:
-                return jsonify({'success': False, 'message': '服务启动失败', 'error': result.stderr})
+                return jsonify({'success': False, 'message': 'Failed to start service', 'error': result.stderr})
         except subprocess.TimeoutExpired:
-            return jsonify({'success': False, 'message': '启动超时'})
+            return jsonify({'success': False, 'message': 'Start timed out'})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/service/<service_key>/stop', methods=['POST'])
 def stop_service(service_key):
-    """停止服务"""
+    """Stop a service"""
     if service_key not in SERVICES:
-        return jsonify({'success': False, 'message': '服务不存在'}), 404
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
 
     service = SERVICES[service_key]
 
-    # 检查是否在运行
+    # Check if it is running
     status = check_service_status(service_key)
     if status['status'] != 'running':
-        return jsonify({'success': False, 'message': '服务未运行'})
+        return jsonify({'success': False, 'message': 'Service is not running'})
 
     try:
-        # 执行停止脚本
+        # Run the stop script
         result = subprocess.run(
             ['bash', service['stop_script']],
             capture_output=True,
@@ -377,47 +548,551 @@ def stop_service(service_key):
         )
 
         if result.returncode == 0:
-            return jsonify({'success': True, 'message': '服务停止成功', 'output': result.stdout})
+            return jsonify({'success': True, 'message': 'Service stopped', 'output': result.stdout})
         else:
-            return jsonify({'success': False, 'message': '服务停止失败', 'error': result.stderr})
+            return jsonify({'success': False, 'message': 'Failed to stop service', 'error': result.stderr})
     except subprocess.TimeoutExpired:
-        return jsonify({'success': False, 'message': '停止超时'})
+        return jsonify({'success': False, 'message': 'Stop timed out'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
+@app.route('/api/service/<service_key>/remove', methods=['POST'])
+def remove_service(service_key):
+    """Remove a service: stop it (if running), delete its entry from services.json,
+    and delete its generated start/stop scripts (for generated services)."""
+    if service_key not in SERVICES:
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
+    service = SERVICES[service_key]
+
+    # Stop the service first (if running)
+    status = check_service_status(service_key)
+    if status.get('status') == 'running':
+        try:
+            subprocess.run(['bash', service['stop_script']], capture_output=True, text=True, timeout=30)
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Failed to stop service before removing: {e}'})
+
+    # Delete generated start/stop scripts (only for generated services; hand-written
+    # services use scripts in ~/Desktop/AI that the user may want to keep)
+    deleted_scripts = []
+    if service.get('generated'):
+        for script in (service.get('start_script'), service.get('stop_script')):
+            if script and os.path.exists(script):
+                try:
+                    os.remove(script)
+                    deleted_scripts.append(script)
+                except Exception:
+                    pass
+
+    # Remove from the in-memory registry + persist to services.json
+    del SERVICES[service_key]
+    save_services_config()
+    return jsonify({
+        'success': True,
+        'message': 'Service removed',
+        'deleted_scripts': deleted_scripts,
+    })
+
+@app.route('/api/stop_all', methods=['POST'])
+def stop_all():
+    """Stop ALL services (unload every model). Used by the top-of-page 'Unload all' button.
+
+    Iterates every service in services.json, runs its stop_script if running, and returns
+    a per-service result. Idempotent — already-stopped services are reported as such.
+    """
+    results = {}
+    for key, service in SERVICES.items():
+        status = check_service_status(key)
+        if status.get('status') == 'running':
+            try:
+                result = subprocess.run(
+                    ['bash', service['stop_script']],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                ok = result.returncode == 0
+                results[key] = {'success': ok, 'message': 'stopped' if ok else result.stderr}
+            except Exception as e:
+                results[key] = {'success': False, 'message': str(e)}
+        else:
+            results[key] = {'success': True, 'message': 'not running'}
+    return jsonify({'success': True, 'results': results})
+
+@app.route('/api/hermes/switch', methods=['POST'])
+def switch_hermes_port():
+    """Switch Hermes to point at a specific vLLM port (so the user can keep
+    talking to the agent while the big brain is stopped for a dual-card cutover).
+    
+    Example: POST /api/hermes/switch {"port": 8002}
+    """
+    data = request.get_json(silent=True) or {}
+    port = data.get('port')
+    if not port or not (1024 <= int(port) <= 65535):
+        return jsonify({'success': False, 'message': 'Invalid port'}), 400
+
+    port = int(port)
+    base_url = f'http://127.0.0.1:{port}/v1'
+
+    # 1. Update the Hermes config (the manager's minimal PATH lacks the hermes CLI;
+    #    add its bin dir explicitly)
+    try:
+        env = os.environ.copy()
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        result = subprocess.run(
+            ['hermes', 'config', 'set', 'model.base_url', base_url],
+            capture_output=True, text=True, timeout=10, env=env
+        )
+        if result.returncode != 0:
+            return jsonify({'success': False, 'message': f'Failed to set config: {result.stderr}'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+    # 2. Restart the Hermes gateway (from the manager's backend, not the gateway itself)
+    try:
+        result = subprocess.run(
+            ['systemctl', '--user', 'restart', 'hermes-gateway'],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            return jsonify({
+                'success': False,
+                'message': f'Config set to {base_url}, but gateway restart failed: {result.stderr}'
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+    return jsonify({
+        'success': True,
+        'message': f'Hermes switched to port {port} ({base_url}). Gateway restarting.',
+        'port': port,
+        'base_url': base_url
+    })
+
+@app.route('/api/hermes/current', methods=['GET'])
+def get_hermes_current():
+    """Return the port Hermes is currently pointed at (model.base_url in its config)."""
+    import re
+    try:
+        env = os.environ.copy()
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        result = subprocess.run(
+            ['hermes', 'config', 'get', 'model.base_url'],
+            capture_output=True, text=True, timeout=10, env=env
+        )
+        if result.returncode != 0:
+            return jsonify({'success': False, 'message': f'Failed to read config: {result.stderr}'})
+        base_url = result.stdout.strip()
+        m = re.search(r':(\d{2,5})', base_url)
+        if not m:
+            return jsonify({'success': False, 'message': f'No port found in base_url: {base_url}'})
+        return jsonify({'success': True, 'port': int(m.group(1)), 'base_url': base_url})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/hermes/webapp-link', methods=['GET'])
+def get_hermes_webapp_link():
+    """Mint a fresh one-use sign-in link for the Hermes Webapp (port 9120) so the
+    manager UI can open it in a new tab and sign that browser in.
+
+    The Webapp authenticates each browser with a one-use launch ticket
+    (``/webapp/launch#ticket=*** valid ~60s), minted by the running gateway. A
+    plain new tab at the base URL has no session token and shows "Sign in to
+    Hermes". We ask ``hermes webapp`` for a fresh link and hand it back; the
+    button opens it immediately (well inside the 60s window).
+    """
+    try:
+        env = os.environ.copy()
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        result = subprocess.run(
+            ['hermes', 'webapp', '--no-open', '--skip-build'],
+            capture_output=True, text=True, timeout=20, env=env
+        )
+        output = (result.stdout or '') + (result.stderr or '')
+        # Preferred: the one-use launch link (http://127.0.0.1:9120/webapp/launch#ticket=...)
+        m = re.search(r'https?://\S+/webapp/launch#[^\s]+', output)
+        if not m:
+            # Fallback: a plain sign-in URL (Webapp behind dashboard sign-in)
+            m = re.search(r'https?://\S+', output)
+        if not m:
+            return jsonify({'success': False, 'message': f'No webapp link found: {output.strip()[:300]}'}), 500
+        return jsonify({'success': True, 'url': m.group(0)})
+    except subprocess.TimeoutExpired:
+        return jsonify({'success': False, 'message': 'Timed out minting the webapp link'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/manager/restart', methods=['POST'])
+def restart_manager():
+    """Restart the manager backend (vllm-manager-backend) to reload config (e.g. services.json).
+
+    The backend loads config/services.json only at import, so an on-disk edit is invisible
+    until the backend restarts. This endpoint triggers that restart. The backend is a user
+    systemd service, so the systemctl call is detached (start_new_session) to survive the
+    backend being killed by its own restart.
+    """
+    try:
+        subprocess.Popen(
+            ['systemctl', '--user', 'restart', 'vllm-manager-backend'],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return jsonify({'success': True, 'message': 'Manager backend restarting. The UI will reconnect in a few seconds.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to restart manager: {e}'}), 500
+
+def _resolve_log_file(service):
+    """Resolve a service's log file, with loader-specific fallbacks.
+    LM Studio (llmster daemon) writes rolling date logs to
+    ~/.lmstudio/server-logs/YYYY/*.log — its configured log_file is never
+    written by the start script, so fall back to the newest of those."""
+    lf = service.get('log_file')
+    if lf and os.path.exists(lf):
+        return lf
+    if (service.get('loader') or '').lower() == 'lmstudio':
+        try:
+            newest = max(
+                glob.glob(os.path.expanduser('~/.lmstudio/server-logs/*/*.log')),
+                key=os.path.getmtime, default=None)
+            if newest:
+                return newest
+        except Exception:
+            pass
+    return lf
+
 @app.route('/api/service/<service_key>/logs')
 def get_logs(service_key):
-    """获取服务日志"""
+    """Get service logs"""
     if service_key not in SERVICES:
-        return jsonify({'success': False, 'message': '服务不存在'}), 404
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
 
     service = SERVICES[service_key]
     lines = request.args.get('lines', 100, type=int)
+    log_file = _resolve_log_file(service)
 
     try:
-        if os.path.exists(service['log_file']):
+        if log_file and os.path.exists(log_file):
             result = subprocess.run(
-                ['tail', '-n', str(lines), service['log_file']],
+                ['tail', '-n', str(lines), log_file],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
             return jsonify({'success': True, 'logs': result.stdout})
         else:
-            return jsonify({'success': False, 'message': '日志文件不存在'})
+            return jsonify({'success': False, 'message': 'Log file does not exist'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
+def _vllm_metrics_payload(service_key):
+    """Build the vLLM metrics payload (dict) for a running service. Returns (payload, error)."""
+    service = SERVICES[service_key]
+    port = service.get('default_params', {}).get('port', 8000)
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/metrics', timeout=3) as r:
+            data, buckets = _parse_prom(r.read().decode())
+    except Exception as e:
+        return None, f'Failed to fetch vLLM metrics: {e}'
+
+    gen = data.get('vllm:generation_tokens_total', 0)
+    prompt = data.get('vllm:prompt_tokens_total', 0)
+
+    # Live rates from consecutive polls + rolling windows for hi/lo
+    now = time.time()
+    prev = VLLM_STATE.get(service_key, {}).get('prev')
+    live_rate = None
+    live_prefill = None
+    if prev and now > prev['ts']:
+        dt = now - prev['ts']
+        live_rate = (gen - prev['gen']) / dt
+        live_prefill = (prompt - prev['prompt']) / dt
+    state = VLLM_STATE.setdefault(service_key, {
+        'gen_samples': deque(maxlen=150),
+        'prefill_samples': deque(maxlen=150),
+    })
+    if live_rate is not None:
+        state['gen_samples'].append(live_rate)
+    if live_prefill is not None:
+        state['prefill_samples'].append(live_prefill)
+    live_max = max(state['gen_samples']) if state['gen_samples'] else None
+    live_min = min(state['gen_samples']) if state['gen_samples'] else None
+    prefill_max = max(state['prefill_samples']) if state['prefill_samples'] else None
+    prefill_min = min(state['prefill_samples']) if state['prefill_samples'] else None
+    VLLM_STATE[service_key]['prev'] = {'ts': now, 'gen': gen, 'prompt': prompt}
+
+    e2e = data.get('vllm:e2e_request_latency_seconds', {})
+    ttft = data.get('vllm:time_to_first_token_seconds', {})
+    e2e_sum = e2e.get('sum') or 0
+    ttft_sum = ttft.get('sum') or 0
+
+    # Avg generation throughput = total generated tokens / pure generation (decode) time.
+    # e2e - TTFT strips the prefill phase so the average is not diluted by prefill;
+    # the numerator is generation tokens only (never prompt/prefill tokens).
+    gen_time = e2e_sum - ttft_sum
+    if gen_time > 0:
+        avg_rate = gen / gen_time
+    elif e2e_sum:
+        avg_rate = gen / e2e_sum
+    else:
+        avg_rate = None
+
+    # TTFT (prefill speed): avg + histogram min/max
+    ttft_avg = ttft.get('sum', 0) / ttft['count'] if ttft.get('count') else None
+    # Avg prefill speed = total prompt tokens / total prefill time
+    prefill_avg = prompt / ttft_sum if ttft_sum else None
+    ttft_min, ttft_max = None, None
+    b = sorted(buckets.get('vllm:time_to_first_token_seconds', []))
+    total = ttft.get('count', 0)
+    if b and total:
+        prev_le = 0.0
+        for le, c in b:
+            if c > 0 and ttft_min is None:
+                ttft_min = prev_le  # lower bound of first non-empty bucket
+            if le == float('inf'):
+                break
+            if c < total:
+                ttft_max = le  # upper bound of last non-empty finite bucket
+            prev_le = le
+
+    # Prefix-cache hit rate
+    cached = data.get('vllm:prompt_tokens_cached_total', 0)
+    cache_pct = cached / prompt * 100 if prompt else None
+
+    return {
+        'prompt_tokens': int(prompt),
+        'generation_tokens': int(gen),
+        'live_tokens_per_sec': round(live_rate, 1) if live_rate is not None else None,
+        'live_max': round(live_max, 1) if live_max is not None else None,
+        'live_min': round(live_min, 1) if live_min is not None else None,
+        'prefill_avg': round(prefill_avg, 0) if prefill_avg is not None else None,
+        'live_prefill': round(live_prefill, 0) if live_prefill is not None else None,
+        'prefill_max': round(prefill_max, 0) if prefill_max is not None else None,
+        'prefill_min': round(prefill_min, 0) if prefill_min is not None else None,
+        'avg_tokens_per_sec': round(avg_rate, 1) if avg_rate is not None else None,
+        'ttft_avg_s': round(ttft_avg, 2) if ttft_avg is not None else None,
+        'ttft_min_s': round(ttft_min, 2) if ttft_min is not None else None,
+        'ttft_max_s': round(ttft_max, 2) if ttft_max is not None else None,
+        'cache_hit_pct': round(cache_pct, 1) if cache_pct is not None else None,
+        'requests_running': int(data.get('vllm:num_requests_running', 0)),
+        'requests_waiting': int(data.get('vllm:num_requests_waiting', 0)),
+    }, None
+
+
+def _ollama_metrics(port):
+    """Ollama live stats: loaded models + VRAM (/api/ps) and version (/api/version)."""
+    out = {'loader': 'ollama', 'loaded_models': []}
+    try:
+        with urllib.request.urlopen(f'http://localhost:{port}/api/ps', timeout=3) as r:
+            ps = json.loads(r.read().decode())
+        for m in ps.get('models', []):
+            out['loaded_models'].append({
+                'name': m.get('name'),
+                'size_gb': round(m.get('size', 0) / 1024 ** 3, 2),
+                'vram_gb': round(m.get('size_vram', 0) / 1024 ** 3, 2),
+            })
+    except Exception as e:
+        out['detail'] = f'/api/ps unavailable: {e}'
+    try:
+        with urllib.request.urlopen(f'http://localhost:{port}/api/version', timeout=3) as r:
+            out['version'] = json.loads(r.read().decode()).get('version')
+    except Exception:
+        pass
+    return out
+
+
+def _lmstudio_metrics(service):
+    """LM Studio live stats: loaded models + throughput metrics from the metrics-proxy CSV."""
+    port = service.get('default_params', {}).get('port', 45987)
+    out = {'loader': 'lmstudio', 'loaded_models': []}
+    # Loaded models from the local server's /v1/models (OpenAI-compatible)
+    try:
+        with urllib.request.urlopen(f'http://localhost:{port}/v1/models', timeout=3) as r:
+            models = json.loads(r.read().decode()).get('data', [])
+        for m in models:
+            out['loaded_models'].append({'name': m.get('id')})
+    except Exception as e:
+        out['detail'] = f'local server /v1/models unavailable: {e}'
+    # Throughput metrics from the metrics-proxy CSV
+    csv_file = '/home/j/logs/metrics_lmstudio.csv'
+    try:
+        import csv
+        with open(csv_file) as f:
+            rows = list(csv.DictReader(f))
+        if rows:
+            # Most recent request
+            last = rows[-1]
+            out['live_tokens_per_sec'] = float(last.get('tokens_per_second', 0) or 0)
+            out['requests_running'] = 0
+            out['requests_waiting'] = 0
+            # Averages over the last 10 requests
+            recent = rows[-10:]
+            tps_vals = [float(r.get('tokens_per_second', 0) or 0) for r in recent]
+            out['avg_tokens_per_sec'] = sum(tps_vals) / len(tps_vals) if tps_vals else 0
+            out['total_requests'] = len(rows)
+    except Exception:
+        pass
+    return out
+
+
+def _llama_cpp_metrics(service):
+    """llama.cpp live stats: the service runs a single model; report its name (no token throughput)."""
+    out = {'loader': 'llama_cpp', 'loaded_models': []}
+    name = service.get('name', '')
+    model = name.replace(' (llama.cpp)', '').strip()
+    if model:
+        out['loaded_models'].append({'name': model})
+    out['detail'] = 'llama.cpp exposes no token throughput; VRAM is shown in the card'
+    return out
+
+
+@app.route('/api/service/<service_key>/vllm_metrics')
+def get_vllm_metrics(service_key):
+    """Fetch live vLLM Prometheus metrics for a service (per-GPU throughput)."""
+    if service_key not in SERVICES:
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
+    status = check_service_status(service_key)
+    if not status or status.get('status') != 'running':
+        return jsonify({'success': False, 'message': 'Service is not running'})
+    payload, err = _vllm_metrics_payload(service_key)
+    if err:
+        return jsonify({'success': False, 'message': err})
+    return jsonify({'success': True, 'loader': 'vllm', **payload})
+
+
+@app.route('/api/service/<service_key>/metrics')
+def get_service_metrics(service_key):
+    """Unified live stats for any service — dispatches on the service's loader.
+
+    vllm -> rich throughput; ollama/lmstudio -> loaded models + VRAM; llama_cpp -> model name.
+    """
+    if service_key not in SERVICES:
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
+    service = SERVICES[service_key]
+    loader_key = service.get('loader') or 'vllm'
+    status = check_service_status(service_key)
+    if not status or status.get('status') != 'running':
+        return jsonify({'success': False, 'message': 'Service is not running', 'loader': loader_key})
+    try:
+        if loader_key == 'vllm':
+            payload, err = _vllm_metrics_payload(service_key)
+            if err:
+                return jsonify({'success': False, 'message': err, 'loader': loader_key})
+            return jsonify({'success': True, 'loader': 'vllm', **payload})
+        if loader_key == 'ollama':
+            port = service.get('default_params', {}).get('port', 11434)
+            return jsonify({'success': True, **_ollama_metrics(port)})
+        if loader_key == 'lmstudio':
+            return jsonify({'success': True, **_lmstudio_metrics(service)})
+        if loader_key == 'llama_cpp':
+            return jsonify({'success': True, **_llama_cpp_metrics(service)})
+        return jsonify({'success': True, 'loader': loader_key,
+                        'detail': f'No live metrics for loader {loader_key}'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e), 'loader': loader_key})
+
+@app.route('/api/service/<service_key>/chat')
+def get_service_chat(service_key):
+    """Serve a minimal self-contained web chat that talks to the service's model
+    (OpenAI-compatible /v1/chat/completions on the service's port)."""
+    if service_key not in SERVICES:
+        return jsonify({'success': False, 'message': 'Service not found'}), 404
+    service = SERVICES[service_key]
+    port = service.get('default_params', {}).get('port', 8000)
+    name = service.get('name', service_key)
+    loader = service.get('loader', '')
+    return render_template('chat.html', port=port, name=name, loader=loader)
+
 @app.route('/api/system')
 def get_system_info():
-    """获取系统信息"""
+    """Get system info"""
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
 
+        # CPU name + live clock from /proc/cpuinfo
+        cpu_name = ''
+        cpu_mhz = 0.0
+        try:
+            with open('/proc/cpuinfo') as f:
+                for line in f:
+                    if line.startswith('model name'):
+                        cpu_name = line.split(':', 1)[1].strip()
+                    elif line.startswith('cpu MHz'):
+                        try:
+                            cpu_mhz = float(line.split(':', 1)[1].strip())
+                        except ValueError:
+                            pass
+        except Exception:
+            pass
+
+        # CPU temperature: k10temp hwmon (millidegrees), fallback = first non-wifi thermal zone
+        cpu_temp = 0.0
+        try:
+            import glob, os
+            for hw in glob.glob('/sys/class/hwmon/hwmon*'):
+                try:
+                    with open(os.path.join(hw, 'name')) as f:
+                        if f.read().strip() == 'k10temp':
+                            with open(os.path.join(hw, 'temp1_input')) as f:
+                                cpu_temp = int(f.read().strip()) / 1000.0
+                            break
+                except Exception:
+                    continue
+            if cpu_temp == 0.0:
+                for tz in glob.glob('/sys/class/thermal/thermal_zone*'):
+                    try:
+                        with open(os.path.join(tz, 'type')) as f:
+                            t = f.read().strip()
+                        if 'wifi' not in t.lower():
+                            with open(os.path.join(tz, 'temp')) as f:
+                                cpu_temp = int(f.read().strip()) / 1000.0
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # System RAM (DRAM) temperature: only present on some platforms (server BMCs,
+        # some laptop ECs). Search thermal zones + hwmon chips for a ram/dram/memory
+        # sensor; None (-> null) when not exposed so the UI can show nothing.
+        ram_temp = None
+        try:
+            import glob, os
+            def _match(name):
+                n = name.lower()
+                return ('ram' in n) or ('dram' in n) or ('memory' in n)
+            for hw in glob.glob('/sys/class/hwmon/hwmon*'):
+                try:
+                    with open(os.path.join(hw, 'name')) as f:
+                        if _match(f.read().strip()):
+                            for t in glob.glob(os.path.join(hw, 'temp*_input')):
+                                with open(t) as f:
+                                    ram_temp = int(f.read().strip()) / 1000.0
+                                    break
+                            break
+                except Exception:
+                    continue
+            if ram_temp is None:
+                for tz in glob.glob('/sys/class/thermal/thermal_zone*'):
+                    try:
+                        with open(os.path.join(tz, 'type')) as f:
+                            if _match(f.read().strip()):
+                                with open(os.path.join(tz, 'temp')) as f:
+                                    ram_temp = int(f.read().strip()) / 1000.0
+                                break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
         return jsonify({
             'cpu_percent': cpu_percent,
+            'cpu_name': cpu_name,
+            'cpu_mhz': cpu_mhz,
+            'cpu_temp_c': cpu_temp,
+            'ram_temp_c': ram_temp,
             'memory_percent': memory.percent,
             'memory_used_gb': memory.used / 1024 / 1024 / 1024,
             'memory_total_gb': memory.total / 1024 / 1024 / 1024,
@@ -428,17 +1103,353 @@ def get_system_info():
     except Exception as e:
         return jsonify({'error': str(e)})
 
+# --- Loaders (hardware/loader-agnostic core) ---
+
+@app.route('/api/loaders')
+def get_loaders():
+    """Detection status + capabilities of every registered model loader."""
+    out = {}
+    for loader in all_loaders():
+        try:
+            d = loader.detect()
+        except Exception as e:
+            d = {'installed': False, 'version': None, 'detail': f'detect failed: {e}'}
+        out[loader.key] = {
+            'name': loader.name,
+            'installed': d['installed'],
+            'version': d.get('version'),
+            'detail': d.get('detail'),
+            'param_schema': loader.param_schema,
+            'requires_model': loader.requires_model,
+            'fixed_port': loader.fixed_port,
+        }
+    return jsonify(out)
+
+@app.route('/api/models')
+def get_models():
+    """All models across all loaders, tagged with source + format.
+
+    Uses the unified scan_all_model_dirs() (filesystem scan of all known
+    locations) + live loader APIs (ollama /api/tags, lms ls) + existing
+    services. Each model is tagged with:
+      - source: where it was found
+      - format: 'safetensors' | 'gguf' | 'weights'
+      - loaders: which loaders can load it
+    """
+    from loaders.base import scan_all_model_dirs
+    models = []
+    seen = set()
+
+    def _add(m):
+        key = (m['name'], m.get('source', ''), m.get('loader', ''))
+        if key not in seen:
+            seen.add(key)
+            models.append(m)
+
+    # 1) Unified filesystem scan (all known locations)
+    for m in scan_all_model_dirs():
+        # Convert 'loaders' list to a single 'loader' tag for the frontend
+        # (the frontend filters by the selected loader).
+        for loader_key in m.get('loaders', []):
+            _add({
+                'name': m['name'],
+                'path': m.get('path'),
+                'size_gb': m.get('size_gb', 0.0),
+                'format': m.get('format', 'weights'),
+                'source': m.get('source', 'unknown'),
+                'loader': loader_key,
+            })
+
+    # 2) Live loader APIs (ollama /api/tags, lms ls) — catches models not on disk
+    for loader in all_loaders():
+        try:
+            if not loader.detect()['installed']:
+                continue
+            for m in loader.list_models():
+                m = dict(m)
+                m['loader'] = loader.key
+                _add(m)
+        except Exception:
+            pass
+
+    # 3) Existing services (so you can re-add a removed service or duplicate)
+    for key, svc in SERVICES.items():
+        loader_key = svc.get('loader')
+        if not loader_key:
+            continue
+        model_path = svc.get('model_path', '')
+        model_name = model_path.rstrip('/').split('/')[-1] if model_path else svc.get('name', '')
+        if not model_name:
+            continue
+        _add({
+            'name': model_name,
+            'path': model_path or None,
+            'size_gb': None,
+            'format': 'service',
+            'source': 'service',
+            'loader': loader_key,
+            'from_service': key,
+        })
+
+    return jsonify(models)
+
+@app.route('/api/services/generate', methods=['POST'])
+def generate_service():
+    """Generate a service entry + start/stop scripts from loader + model + params.
+
+    Body: {loader, model?, gpus?, port?, params?}
+    Writes into config/services.json (marked generated:true) and returns the key.
+    The backend must be restarted to pick up the new service (config-reload gotcha).
+    """
+    data = request.get_json(silent=True) or {}
+    loader = get_loader(data.get('loader'))
+    if not loader:
+        return jsonify({'success': False, 'message': f"Unknown loader: {data.get('loader')}"}), 400
+    if not loader.detect()['installed']:
+        return jsonify({'success': False, 'message': f"{loader.name} is not installed on this machine"}), 400
+    model = data.get('model') or None
+    if loader.requires_model and not model:
+        return jsonify({'success': False, 'message': 'model is required for this loader'}), 400
+    gpus = data.get('gpus') or []
+    port = loader.fixed_port if loader.fixed_port else int(data.get('port') or next_free_port())
+    key = make_service_key(loader.key, model or loader.key)
+    existing = set(SERVICES.keys())
+    if key in existing:
+        i = 2
+        while f'{key}_{i}' in existing:
+            i += 1
+        key = f'{key}_{i}'
+    result = loader.build_service(key, model, {
+        'gpus': gpus,
+        'port': port,
+        **(data.get('params') or {}),
+    })
+    SERVICES[key] = result['service']
+    save_services_config()
+    return jsonify({
+        'success': True,
+        'key': key,
+        'service': result['service'],
+        'note': 'Restart the manager backend to activate the new service.',
+    })
+
+# --- Autostart (systemd user units) ---
+
+MANAGER_UNITS = ['vllm-manager-backend', 'vllm-manager-frontend']
+
+@app.route('/api/autostart')
+def get_autostart():
+    out = {}
+    for u in MANAGER_UNITS:
+        enabled = subprocess.run(['systemctl', '--user', 'is-enabled', f'{u}.service'],
+                                capture_output=True, text=True, timeout=10)
+        active = subprocess.run(['systemctl', '--user', 'is-active', f'{u}.service'],
+                               capture_output=True, text=True, timeout=10)
+        out[u] = {
+            'enabled': enabled.stdout.strip() == 'enabled',
+            'active': active.stdout.strip() == 'active',
+        }
+    return jsonify(out)
+
+@app.route('/api/autostart', methods=['POST'])
+def set_autostart():
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled'))
+    verb = 'enable' if enabled else 'disable'
+    r = subprocess.run(['systemctl', '--user', verb] + [f'{u}.service' for u in MANAGER_UNITS],
+                       capture_output=True, text=True, timeout=15)
+    return jsonify({'success': r.returncode == 0, 'output': (r.stdout + r.stderr).strip()})
+
+# --- ComfyUI per-image generation tracking (queue-diff across polls) ---
+# The card polls /api/comfyui/status every 2s; each poll diffs the queue so
+# completed prompts yield a queue->done time. State resets on backend restart.
+COMFYUI_STATE = {
+    'gen_times': deque(maxlen=50),  # seconds per completed image (last 50)
+    'total_images': 0,
+    'seen': {},                     # prompt_id -> first-seen epoch (pending or running)
+}
+
+@app.route('/api/comfyui/status')
+def get_comfyui_status():
+    """Proxy the ComfyUI API (liveness, queue, device) + track per-image gen time.
+    Finds ANY running ComfyUI server (headless or GUI) on whatever port it
+    listens on — not hardcoded to :8188."""
+    import requests
+    port, _pid = _find_comfyui_server()
+    result = {
+        'running': False, 'queue_running': 0, 'queue_pending': 0, 'devices': [],
+        'avg_gen_s': None, 'last_gen_s': None, 'total_images': 0, 'current_gen_s': None,
+        'port': port,
+    }
+    if port is None:
+        return jsonify(result)
+    base = f'http://127.0.0.1:{port}'
+    try:
+        # ComfyUI >= 0.45 removed /api/health — use /api/queue for liveness
+        queue_resp = requests.get(f'{base}/api/queue', timeout=3)
+        result['running'] = queue_resp.status_code == 200
+    except Exception:
+        queue_resp = None
+
+    if not result['running'] or queue_resp is None:
+        return jsonify(result)
+
+    try:
+        queue = queue_resp.json()
+    except Exception:
+        queue = {}
+    running = queue.get('queue_running', [])
+    pending = queue.get('queue_pending', [])
+    result['queue_running'] = len(running)
+    result['queue_pending'] = len(pending)
+
+    # --- queue-diff: prompts that left the queue since we first saw them ---
+    now = time.time()
+    active_ids = [item[0] for item in running + pending]
+    for pid in active_ids:
+        COMFYUI_STATE['seen'].setdefault(pid, now)
+    for pid in list(COMFYUI_STATE['seen']):
+        if pid not in active_ids:
+            gen_s = now - COMFYUI_STATE['seen'].pop(pid)
+            if gen_s < 600:  # >10min = stale id (ComfyUI/backend restart), don't count
+                COMFYUI_STATE['gen_times'].append(gen_s)
+                COMFYUI_STATE['total_images'] += 1
+    if COMFYUI_STATE['gen_times']:
+        result['avg_gen_s'] = round(sum(COMFYUI_STATE['gen_times']) / len(COMFYUI_STATE['gen_times']), 1)
+        result['last_gen_s'] = round(COMFYUI_STATE['gen_times'][-1], 1)
+    if running:
+        pid = running[0][0]
+        if pid in COMFYUI_STATE['seen']:
+            result['current_gen_s'] = round(now - COMFYUI_STATE['seen'][pid], 1)
+    result['total_images'] = COMFYUI_STATE['total_images']
+
+    try:
+        sys_stats = requests.get(f'{base}/api/system_stats', timeout=3).json()
+        for d in sys_stats.get('devices', []):
+            result['devices'].append({'name': d.get('name', '')})
+    except Exception:
+        pass
+
+    return jsonify(result)
+
+# --- ComfyUI stop (kill button) ---
+def _comfyui_cmdline_match(cmd):
+    """True if a process cmdline looks like a ComfyUI server — headless
+    (python main.py from a ComfyUI checkout) or the GUI desktop app
+    (standalone env / desktop launcher)."""
+    if not cmd:
+        return False
+    if 'main.py' in cmd and ('ComfyUI' in cmd or 'comfyui' in cmd):
+        return True
+    if 'comfyui-desktop' in cmd or 'comfyui-standalone' in cmd:
+        return True
+    if 'ComfyUI-Installs' in cmd:
+        return True
+    return False
+
+def _find_comfyui_server():
+    """Find a running ComfyUI server (ANY launch mode: headless or GUI):
+    (port, pid) or (None, None). Primary: a TCP listener whose process
+    cmdline matches; fallback: process scan (port unknown -> default 8188)."""
+    try:
+        for conn in psutil.net_connections(kind='tcp'):
+            if conn.laddr and conn.pid and conn.status == 'LISTEN':
+                try:
+                    p = psutil.Process(conn.pid)
+                    cmd = ' '.join(p.cmdline() or [])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                if _comfyui_cmdline_match(cmd):
+                    return conn.laddr.port, conn.pid
+    except Exception:
+        pass
+    for p in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            cmd = ' '.join(p.info.get('cmdline') or [])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if _comfyui_cmdline_match(cmd):
+            return 8188, p.pid
+    return None, None
+
+def _find_comfyui_pids():
+    """PIDs of any running ComfyUI (headless or GUI): every listener on a
+    matching port + every process whose cmdline matches (covers the GUI
+    launcher and its child server)."""
+    pids = set()
+    try:
+        for conn in psutil.net_connections(kind='tcp'):
+            if conn.laddr and conn.pid and conn.status == 'LISTEN':
+                try:
+                    p = psutil.Process(conn.pid)
+                    cmd = ' '.join(p.cmdline() or [])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                if _comfyui_cmdline_match(cmd):
+                    pids.add(conn.pid)
+    except Exception:
+        pass
+    for p in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            cmd = ' '.join(p.info.get('cmdline') or [])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if _comfyui_cmdline_match(cmd):
+            pids.add(p.pid)
+    return sorted(pids)
+
+@app.route('/api/comfyui/stop', methods=['POST'])
+def stop_comfyui():
+    """Stop the headless ComfyUI server (SIGTERM, then SIGKILL if needed)."""
+    pids = _find_comfyui_pids()
+    if not pids:
+        return jsonify({'ok': False, 'error': 'ComfyUI not running', 'pids': []})
+    for pid in pids:
+        try:
+            psutil.Process(pid).terminate()
+        except psutil.NoSuchProcess:
+            pass
+    time.sleep(3)  # grace period
+    for pid in pids:
+        try:
+            p = psutil.Process(pid)
+            if p.status() == psutil.STATUS_ZOMBIE:
+                continue
+            p.kill()
+        except psutil.NoSuchProcess:
+            pass
+    return jsonify({'ok': True, 'killed': pids})
+
+@app.route('/api/comfyui/logs')
+def get_comfyui_logs():
+    """Tail the headless ComfyUI log (launch scripts tee output to this file)."""
+    log_file = '/home/j/logs/comfyui.log'
+    lines = request.args.get('lines', 200, type=int)
+    try:
+        if os.path.exists(log_file):
+            result = subprocess.run(
+                ['tail', '-n', str(lines), log_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return jsonify({'success': True, 'logs': result.stdout})
+        else:
+            return jsonify({'success': False, 'message': 'No log file yet — launch ComfyUI via ~/Desktop/AI/comfyui-9070.sh (or -9700.sh); output is captured there'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
 if __name__ == '__main__':
-    # 启动服务
+    # Start the service
     port = int(os.environ.get('PORT', 9000))
     host = os.environ.get('HOST', '0.0.0.0')
 
     print("=" * 60)
-    print("🚀 vLLM Model Manager")
+    print("🚀 LLM Model Manager")
     print("=" * 60)
-    print(f"访问地址: http://{host}:{port}")
-    print(f"配置文件: {CONFIG_FILE}")
-    print(f"管理服务数: {len(SERVICES)}")
+    print(f"URL: http://{host}:{port}")
+    print(f"Config file: {CONFIG_FILE}")
+    print(f"Services managed: {len(SERVICES)}")
     print("=" * 60)
 
     app.run(host=host, port=port, debug=False)

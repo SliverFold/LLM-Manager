@@ -1,6 +1,6 @@
-# vLLM Model Manager - Frontend
+# LLM Model Manager - Frontend
 
-现代化 Cyberpunk 风格的 vLLM 模型管理仪表板。
+现代化 Cyberpunk 风格的 LLM 模型管理仪表板。
 
 ## 技术栈
 
@@ -52,5 +52,5 @@ npm start
 - 📊 **实时监控** - 每 5 秒自动刷新数据
 - 🎮 **GPU 状态** - 利用率、显存、温度、功耗
 - 💻 **系统资源** - CPU、内存、磁盘使用情况
-- 🤖 **服务管理** - 一键启动/停止 vLLM 服务
+- 🤖 **服务管理** - 一键启动/停止 LLM 服务
 - 📝 **日志查看** - 实时查看服务日志

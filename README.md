@@ -1,4 +1,4 @@
-# vLLM Model Manager
+# LLM Model Manager
 
 <div align="center">
 
@@ -6,7 +6,7 @@
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-一个优雅的 Web 管理系统，用于管理和监控 vLLM 模型服务
+一个优雅的 Web 管理系统，用于管理和监控 LLM 模型服务（vLLM、Ollama、LM Studio、llama.cpp 等）
 
 [功能特性](#功能特性) • [快速开始](#快速开始) • [配置说明](#配置说明) • [界面预览](#界面预览) • [API文档](#api文档)
 
@@ -41,9 +41,9 @@
 
 - Python 3.8+
 - Node.js 18+
-- NVIDIA GPU with CUDA
-- vLLM 已安装
-- nvidia-smi 可用
+- GPU（NVIDIA with CUDA 或 AMD ROCm）
+- 至少一个 LLM 推理后端已安装（vLLM、Ollama、LM Studio、llama.cpp）
+- nvidia-smi 或 rocm-smi 可用
 
 ### 安装依赖
 

@@ -1,0 +1,16 @@
+{
+    "hf_cache": "~/.cache/huggingface",
+    "gguf_dirs": [
+        "~/models/gguf"
+    ],
+    "extra_model_dirs": [],
+    "port_base": 8000,
+    "reserved_ports": [
+        3000,
+        9000,
+        11434,
+        45987,
+        8188
+    ],
+    "generated_scripts_dir": "~/Desktop/AI/vllm-model-manager-/scripts/generated"
+}

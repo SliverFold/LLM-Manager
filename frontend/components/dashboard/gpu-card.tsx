@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Microchip, Thermometer, Zap, Activity } from 'lucide-react';
+import { Microchip, Thermometer, Zap, Activity, MemoryStick } from 'lucide-react';
 import type { GPUInfo, MetricPoint } from '@/lib/types';
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer } from 'recharts';
 import { useState, useEffect } from 'react';
@@ -46,8 +46,7 @@ export function GPUCard({ gpu, index }: GPUCardProps) {
               <Microchip className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h3 className="font-bold font-display text-sm tracking-wide">GPU {gpu.index}</h3>
-              <p className="text-xs text-muted-foreground font-mono truncate max-w-[120px]" title={gpu.name}>
+              <p className="font-bold font-display text-sm tracking-wide truncate max-w-[120px]" title={gpu.name}>
                 {gpu.name.replace('NVIDIA ', '').replace('GeForce ', '')}
               </p>
             </div>
@@ -55,7 +54,11 @@ export function GPUCard({ gpu, index }: GPUCardProps) {
           <div className="flex flex-col items-end gap-1">
             <Badge variant="outline" className={`font-mono text-xs ${getTempColor(gpu.temperature)} border-border/50`}>
               <Thermometer className="h-3 w-3 mr-1" />
-              {gpu.temperature}°C
+              Hotspot {gpu.temperature}°C
+            </Badge>
+            <Badge variant="outline" className={`font-mono text-xs ${getTempColor(gpu.memory_temperature)} border-border/50`}>
+              <MemoryStick className="h-3 w-3 mr-1" />
+              VRAM {gpu.memory_temperature}°C
             </Badge>
             <div className="flex items-center text-xs text-muted-foreground font-mono">
               <Zap className="h-3 w-3 mr-1" />
@@ -91,14 +94,14 @@ export function GPUCard({ gpu, index }: GPUCardProps) {
         <div className="grid grid-cols-2 gap-4 border-t border-border pt-4">
           <div className="space-y-1">
             <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Activity className="h-3 w-3" /> 利用率
+              <Activity className="h-3 w-3" /> Utilization
             </span>
             <div className="text-xl font-mono font-bold text-foreground">
               {gpu.utilization.toFixed(1)}%
             </div>
           </div>
           <div className="space-y-1">
-            <span className="text-xs text-muted-foreground">显存</span>
+            <span className="text-xs text-muted-foreground">VRAM</span>
             <div className="text-sm font-mono font-bold text-foreground pt-1">
               {gpu.memory_used.toFixed(0)}
               <span className="text-muted-foreground font-normal text-xs"> / {gpu.memory_total.toFixed(0)} MB</span>

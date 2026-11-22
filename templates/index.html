@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>模型服务管理系统</title>
+    <title>Model Service Management System</title>
     <style>
         * {
             margin: 0;
@@ -350,38 +350,38 @@
 <body>
     <div class="container">
         <header>
-            <h1>🚀 模型服务管理系统</h1>
-            <p class="refresh-info">自动刷新间隔: 5秒</p>
+            <h1>🚀 Model Service Management System</h1>
+            <p class="refresh-info">Auto-refresh interval: 5s</p>
         </header>
 
         <div class="system-info">
-            <h2>📊 系统资源</h2>
+            <h2>📊 System Resources</h2>
             <div class="system-stats" id="systemStats">
-                <div class="loading">加载中...</div>
+                <div class="loading">Loading...</div>
             </div>
         </div>
 
         <div class="gpu-section">
-            <h2>🎮 GPU 状态</h2>
+            <h2>🎮 GPU Status</h2>
             <div class="gpu-grid" id="gpuGrid">
-                <div class="loading">加载中...</div>
+                <div class="loading">Loading...</div>
             </div>
         </div>
 
-        <h2 style="color: white; margin-bottom: 15px; text-align: center;">🤖 模型服务</h2>
+        <h2 style="color: white; margin-bottom: 15px; text-align: center;">🤖 Model Services</h2>
         <div class="services-grid" id="servicesGrid">
-            <div class="loading">加载中...</div>
+            <div class="loading">Loading...</div>
         </div>
     </div>
 
     <div id="logsModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 id="logsTitle">服务日志</h2>
+                <h2 id="logsTitle">Service Logs</h2>
                 <span class="close-btn" onclick="closeLogsModal()">&times;</span>
             </div>
             <div class="logs-container" id="logsContent">
-                <div class="loading" style="color: #333;">加载日志中...</div>
+                <div class="loading" style="color: #333;">Loading logs...</div>
             </div>
         </div>
     </div>
@@ -395,7 +395,7 @@
                 const services = await response.json();
                 renderServices(services);
             } catch (error) {
-                console.error('获取服务状态失败:', error);
+                console.error('Failed to get service status:', error);
             }
         }
 
@@ -405,7 +405,7 @@
                 const gpus = await response.json();
                 renderGPU(gpus);
             } catch (error) {
-                console.error('获取GPU信息失败:', error);
+                console.error('Failed to get GPU info:', error);
             }
         }
 
@@ -415,26 +415,26 @@
                 const info = await response.json();
                 renderSystemInfo(info);
             } catch (error) {
-                console.error('获取系统信息失败:', error);
+                console.error('Failed to get system info:', error);
             }
         }
 
         function renderSystemInfo(info) {
             const statsHtml = `
                 <div class="stat-item">
-                    <div class="stat-label">CPU 使用率</div>
+                    <div class="stat-label">CPU usage</div>
                     <div class="stat-value">${info.cpu_percent.toFixed(1)}%</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">内存使用率</div>
+                    <div class="stat-label">Memory usage</div>
                     <div class="stat-value">${info.memory_percent.toFixed(1)}%</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">内存使用</div>
+                    <div class="stat-label">Memory used</div>
                     <div class="stat-value">${info.memory_used_gb.toFixed(1)}GB / ${info.memory_total_gb.toFixed(1)}GB</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-label">磁盘使用率</div>
+                    <div class="stat-label">Disk usage</div>
                     <div class="stat-value">${info.disk_percent.toFixed(1)}%</div>
                 </div>
             `;
@@ -443,7 +443,7 @@
 
         function renderGPU(gpus) {
             if (gpus.length === 0) {
-                document.getElementById('gpuGrid').innerHTML = '<div class="loading">无GPU信息</div>';
+                document.getElementById('gpuGrid').innerHTML = '<div class="loading">No GPU info</div>';
                 return;
             }
 
@@ -454,7 +454,7 @@
                         <div class="gpu-temp">🌡️ ${gpu.temperature}°C</div>
                     </div>
                     <div>
-                        <div style="margin-bottom: 5px;">GPU 利用率</div>
+                        <div style="margin-bottom: 5px;">GPU utilization</div>
                         <div class="progress-bar">
                             <div class="progress-fill" style="width: ${gpu.utilization}%">
                                 ${gpu.utilization.toFixed(1)}%
@@ -462,7 +462,7 @@
                         </div>
                     </div>
                     <div>
-                        <div style="margin-bottom: 5px;">显存使用</div>
+                        <div style="margin-bottom: 5px;">VRAM usage</div>
                         <div class="progress-bar">
                             <div class="progress-fill" style="width: ${(gpu.memory_used / gpu.memory_total * 100)}%">
                                 ${gpu.memory_used.toFixed(0)}MB / ${gpu.memory_total.toFixed(0)}MB
@@ -470,7 +470,7 @@
                         </div>
                     </div>
                     <div class="gpu-info">
-                        ⚡ 功耗: ${gpu.power_draw.toFixed(1)}W / ${gpu.power_limit.toFixed(1)}W
+                        ⚡ Power: ${gpu.power_draw.toFixed(1)}W / ${gpu.power_limit.toFixed(1)}W
                     </div>
                 </div>
             `).join('');
@@ -482,10 +482,10 @@
             const servicesHtml = Object.entries(services).map(([key, service]) => {
                 const isRunning = service.status === 'running';
                 const statusClass = isRunning ? 'status-running' : 'status-stopped';
-                const statusText = isRunning ? '运行中' : '已停止';
+                const statusText = isRunning ? 'Running' : 'Stopped';
 
                 let infoHtml = `
-                    <div><span class="info-label">端口:</span> <span class="info-value">${service.port}</span></div>
+                    <div><span class="info-label">Port:</span> <span class="info-value">${service.port}</span></div>
                     <div><span class="info-label">GPU:</span> <span class="info-value">${service.gpus.join(', ')}</span></div>
                 `;
 
@@ -493,9 +493,9 @@
                     infoHtml += `
                         <div><span class="info-label">PID:</span> <span class="info-value">${service.pid}</span></div>
                         <div><span class="info-label">CPU:</span> <span class="info-value">${service.cpu_percent.toFixed(1)}%</span></div>
-                        <div><span class="info-label">内存:</span> <span class="info-value">${service.memory_mb.toFixed(0)}MB</span></div>
-                        ${service.gpu_memory_mb ? `<div><span class="info-label">GPU显存:</span> <span class="info-value">${service.gpu_memory_mb.toFixed(0)}MB</span></div>` : ''}
-                        <div><span class="info-label">启动时间:</span> <span class="info-value">${service.uptime}</span></div>
+                        <div><span class="info-label">Memory:</span> <span class="info-value">${service.memory_mb.toFixed(0)}MB</span></div>
+                        ${service.gpu_memory_mb ? `<div><span class="info-label">GPU VRAM:</span> <span class="info-value">${service.gpu_memory_mb.toFixed(0)}MB</span></div>` : ''}
+                        <div><span class="info-label">Start time:</span> <span class="info-value">${service.uptime}</span></div>
                     `;
                 }
 
@@ -510,13 +510,13 @@
                         </div>
                         <div class="service-actions">
                             <button class="btn btn-start" onclick="startService('${key}')" ${isRunning ? 'disabled' : ''}>
-                                启动
+                                Start
                             </button>
                             <button class="btn btn-stop" onclick="stopService('${key}')" ${!isRunning ? 'disabled' : ''}>
-                                停止
+                                Stop
                             </button>
                             <button class="btn btn-logs" onclick="viewLogs('${key}', '${service.name}')">
-                                日志
+                                Logs
                             </button>
                         </div>
                     </div>
@@ -527,7 +527,7 @@
         }
 
         async function startService(serviceKey) {
-            if (!confirm('确定要启动此服务吗？')) return;
+            if (!confirm('Start this service?')) return;
 
             try {
                 const response = await fetch(`/api/service/${serviceKey}/start`, {
@@ -536,18 +536,18 @@
                 const result = await response.json();
 
                 if (result.success) {
-                    alert('服务启动成功！');
+                    alert('Service started!');
                     fetchServices();
                 } else {
-                    alert(`启动失败: ${result.message}`);
+                    alert(`Start failed: ${result.message}`);
                 }
             } catch (error) {
-                alert(`启动失败: ${error.message}`);
+                alert(`Start failed: ${error.message}`);
             }
         }
 
         async function stopService(serviceKey) {
-            if (!confirm('确定要停止此服务吗？')) return;
+            if (!confirm('Stop this service?')) return;
 
             try {
                 const response = await fetch(`/api/service/${serviceKey}/stop`, {
@@ -556,33 +556,33 @@
                 const result = await response.json();
 
                 if (result.success) {
-                    alert('服务停止成功！');
+                    alert('Service stopped!');
                     fetchServices();
                 } else {
-                    alert(`停止失败: ${result.message}`);
+                    alert(`Stop failed: ${result.message}`);
                 }
             } catch (error) {
-                alert(`停止失败: ${error.message}`);
+                alert(`Stop failed: ${error.message}`);
             }
         }
 
         async function viewLogs(serviceKey, serviceName) {
             currentLogsService = serviceKey;
-            document.getElementById('logsTitle').textContent = `${serviceName} - 日志`;
+            document.getElementById('logsTitle').textContent = `${serviceName} - Logs`;
             document.getElementById('logsModal').style.display = 'block';
-            document.getElementById('logsContent').innerHTML = '<div class="loading" style="color: #d4d4d4;">加载日志中...</div>';
+            document.getElementById('logsContent').innerHTML = '<div class="loading" style="color: #d4d4d4;">Loading logs...</div>';
 
             try {
                 const response = await fetch(`/api/service/${serviceKey}/logs?lines=200`);
                 const result = await response.json();
 
                 if (result.success) {
-                    document.getElementById('logsContent').textContent = result.logs || '日志为空';
+                    document.getElementById('logsContent').textContent = result.logs || 'Logs are empty';
                 } else {
-                    document.getElementById('logsContent').textContent = `加载日志失败: ${result.message}`;
+                    document.getElementById('logsContent').textContent = `Failed to load logs: ${result.message}`;
                 }
             } catch (error) {
-                document.getElementById('logsContent').textContent = `加载日志失败: ${error.message}`;
+                document.getElementById('logsContent').textContent = `Failed to load logs: ${error.message}`;
             }
         }
 
@@ -590,7 +590,7 @@
             document.getElementById('logsModal').style.display = 'none';
         }
 
-        // 点击模态框外部关闭
+        // Close when clicking outside the modal
         window.onclick = function(event) {
             const modal = document.getElementById('logsModal');
             if (event.target === modal) {
@@ -598,13 +598,13 @@
             }
         }
 
-        // 初始化
+        // Initialize
         function init() {
             fetchServices();
             fetchGPU();
             fetchSystemInfo();
 
-            // 定时刷新
+            // Periodic refresh
             setInterval(() => {
                 fetchServices();
                 fetchGPU();

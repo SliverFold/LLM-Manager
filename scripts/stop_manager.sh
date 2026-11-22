@@ -5,31 +5,31 @@ PID_FILE="/root/logs/model_manager.pid"
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
     if ps -p "$PID" > /dev/null 2>&1; then
-        echo "正在停止模型管理系统 (PID: $PID)..."
+        echo "Stopping the manager (PID: $PID)..."
         kill "$PID"
         sleep 2
         if ps -p "$PID" > /dev/null 2>&1; then
-            echo "强制终止..."
+            echo "Force killing..."
             kill -9 "$PID"
         fi
         rm -f "$PID_FILE"
-        echo "服务已停止"
+        echo "Service stopped"
     else
-        echo "服务未运行"
+        echo "Service not running"
         rm -f "$PID_FILE"
     fi
 else
-    # 尝试通过进程名查找
+    # Try to find it by process name
     if pgrep -f "python3 app.py" > /dev/null; then
-        echo "正在停止模型管理系统..."
+        echo "Stopping the manager..."
         pkill -f "python3 app.py"
         sleep 2
         if pgrep -f "python3 app.py" > /dev/null; then
-            echo "强制终止..."
+            echo "Force killing..."
             pkill -9 -f "python3 app.py"
         fi
-        echo "服务已停止"
+        echo "Service stopped"
     else
-        echo "服务未运行"
+        echo "Service not running"
     fi
 fi

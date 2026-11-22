@@ -1,0 +1,17 @@
+[Unit]
+Description=LLM Model Manager Backend (Flask :9000)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+Environment="HOST=0.0.0.0"
+Environment="PORT=9000"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/opt/rocm/bin:/usr/bin:/bin"
+ExecStart=@REPO@/.venv/bin/python @REPO@/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

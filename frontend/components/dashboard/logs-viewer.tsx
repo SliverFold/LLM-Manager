@@ -1,49 +1,59 @@
 'use client';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getApiUrl } from '@/lib/api-config';
+import { useLang } from '@/lib/i18n';
 
 interface LogsViewerProps {
-  serviceKey: string | null;
+  logUrl: string | null;
   serviceName: string;
   isOpen: boolean;
   onClose: () => void;
 }
 
-export function LogsViewer({ serviceKey, serviceName, isOpen, onClose }: LogsViewerProps) {
+export function LogsViewer({ logUrl, serviceName, isOpen, onClose }: LogsViewerProps) {
+  const { t } = useLang();
   const [logs, setLogs] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Start at the bottom (newest entries); user scrolls up for older ones.
+  useEffect(() => {
+    if (logs && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs]);
 
   useEffect(() => {
-    if (isOpen && serviceKey) {
+    if (isOpen && logUrl) {
       setIsLoading(true);
-      fetch(getApiUrl(`/api/service/${serviceKey}/logs?lines=200`))
+      fetch(getApiUrl(logUrl))
         .then(res => res.json())
         .then(result => {
           if (result.success) {
-            setLogs(result.logs || '日志为空');
+            setLogs(result.logs || t('lv.empty'));
           } else {
-            setLogs(`加载日志失败: ${result.message}`);
+            setLogs(t('lv.loadFailed', { msg: result.message }));
           }
         })
         .catch(error => {
-          setLogs(`加载日志失败: ${error.message}`);
+          setLogs(t('lv.loadFailed', { msg: error.message }));
         })
         .finally(() => {
           setIsLoading(false);
         });
     }
-  }, [isOpen, serviceKey]);
+  }, [isOpen, logUrl]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[80vh] bg-background/95 backdrop-blur-xl border-border shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="font-display">{serviceName} - 日志</DialogTitle>
+          <DialogTitle className="font-display">{t('lv.logsTitle', { name: serviceName })}</DialogTitle>
         </DialogHeader>
-        <div className="mt-4 bg-black/50 rounded-lg p-4 max-h-[60vh] overflow-y-auto border border-border/50 custom-scrollbar">
+        <div ref={scrollRef} className="mt-4 bg-black/50 rounded-lg p-4 max-h-[60vh] overflow-y-auto border border-border/50 custom-scrollbar">
           {isLoading ? (
             <div className="space-y-2">
               {[...Array(10)].map((_, i) => (

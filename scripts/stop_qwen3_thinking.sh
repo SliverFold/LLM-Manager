@@ -1,29 +1,29 @@
 #!/bin/bash
 
-# 查找并停止 Qwen3-Thinking 服务
-echo "正在查找 Qwen3-Thinking 服务..."
+# Find and stop the Qwen3-Thinking service
+echo "Looking for the Qwen3-Thinking service..."
 
 PID=$(pgrep -f "vllm serve.*Qwen3-Next-80B-A3B-Thinking")
 
 if [ -z "$PID" ]; then
-    echo "未找到运行中的 Qwen3-Thinking 服务"
+    echo "No running Qwen3-Thinking service found"
     exit 0
 fi
 
-echo "找到服务进程: $PID"
-echo "正在停止服务..."
+echo "Found service process: $PID"
+echo "Stopping the service..."
 
 kill $PID
 
-# 等待进程结束
+# Wait for the process to end
 for i in {1..30}; do
     if ! ps -p $PID > /dev/null 2>&1; then
-        echo "Qwen3-Thinking 服务已停止"
+        echo "Qwen3-Thinking service stopped"
         exit 0
     fi
     sleep 1
 done
 
-echo "进程未正常结束，强制终止..."
+echo "Process did not exit cleanly, force killing..."
 kill -9 $PID
-echo "Qwen3-Thinking 服务已强制停止"
+echo "Qwen3-Thinking service force stopped"

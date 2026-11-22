@@ -3,42 +3,42 @@
 LOG_FILE="/root/logs/model_manager.log"
 PID_FILE="/root/logs/model_manager.pid"
 
-# 创建日志目录
+# Create the log directory
 mkdir -p /root/logs
 
-# 检查是否已经运行
+# Check if it is already running
 if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE")
     if ps -p "$OLD_PID" > /dev/null 2>&1; then
-        echo "模型管理系统已在运行中 (PID: $OLD_PID)"
-        echo "访问地址: http://0.0.0.0:9000"
+        echo "Manager already running (PID: $OLD_PID)"
+        echo "URL: http://0.0.0.0:9000"
         exit 0
     fi
 fi
 
-# 检查依赖
-echo "检查Python依赖..."
+# Check dependencies
+echo "Checking Python dependencies..."
 pip3 list | grep -q flask || pip3 install flask flask-cors psutil
 
-# 启动服务
-echo "启动模型管理系统..."
+# Start the service
+echo "Starting the manager..."
 cd /root/vllm-model-manager
 nohup python3 app.py > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 
-echo "服务启动中，日志: $LOG_FILE"
-echo "等待服务就绪..."
+echo "Service starting, log: $LOG_FILE"
+echo "Waiting for the service to be ready..."
 
-# 等待服务启动
+# Wait for the service to start
 for i in {1..30}; do
     if curl -s http://localhost:9000 > /dev/null 2>&1; then
-        echo "✓ 服务已就绪!"
-        echo "访问地址: http://0.0.0.0:9000"
-        echo "查看日志: tail -f $LOG_FILE"
+        echo "✓ Service ready!"
+        echo "URL: http://0.0.0.0:9000"
+        echo "View logs: tail -f $LOG_FILE"
         exit 0
     fi
     sleep 1
 done
 
-echo "启动超时，请查看日志: tail -f $LOG_FILE"
+echo "Start timed out, check the log: tail -f $LOG_FILE"
 exit 1
