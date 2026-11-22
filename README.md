@@ -6,72 +6,87 @@
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-一个优雅的 Web 管理系统，用于管理和监控 LLM 模型服务（vLLM、Ollama、LM Studio、llama.cpp 等）
+An elegant web control panel for managing and monitoring LLM model services (vLLM, Ollama, LM Studio, llama.cpp, and more)
 
-[功能特性](#功能特性) • [快速开始](#快速开始) • [配置说明](#配置说明) • [界面预览](#界面预览) • [API文档](#api文档)
+[Features](#features) • [Quick Start](#quick-start) • [Configuration](#configuration) • [UI Overview](#ui-overview) • [API Reference](#api-reference)
 
 </div>
 
 ---
 
-## 功能特性
+## Features
 
-### 核心功能
+### Core
 
-- 🚀 **一键管理** - 通过 Web 界面一键启动/停止所有模型服务
-- 📊 **实时监控** - 实时显示 GPU 利用率、显存使用、温度、功耗等
-- 💻 **系统资源** - 监控 CPU、内存、磁盘使用情况
-- 📝 **日志查看** - 在 Web 界面直接查看服务日志
-- 🎨 **现代化 UI** - 美观的渐变色界面，响应式设计
-- 🔄 **自动刷新** - 每 0.5 秒自动更新所有状态信息
-- ⚙️ **灵活配置** - 通过 JSON 配置文件轻松管理多个服务
+- 🚀 **One-click control** — start/stop any model service from the web UI
+- 📊 **Live monitoring** — GPU utilization, VRAM, temperature, and power in real time
+- 💻 **System resources** — CPU, memory, and disk usage
+- 📝 **Log viewing** — read service logs directly in the web UI
+- 🎨 **Modern UI** — clean gradient design, fully responsive
+- 🔄 **Auto-refresh** — all status updates every 0.5 s
+- ⚙️ **Flexible config** — manage multiple services via a JSON config file
 
-### 支持的功能
+### Also supported
 
-- ✅ 多服务管理
-- ✅ GPU 实时监控
-- ✅ 进程状态追踪
-- ✅ 资源使用统计
-- ✅ 日志实时查看
-- ✅ 配置文件驱动
+- ✅ Multi-service management
+- ✅ Live GPU monitoring
+- ✅ Process status tracking
+- ✅ Resource usage stats
+- ✅ Real-time log viewing
+- ✅ Config-file driven
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### First run / reinstall (one command)
+
+The repo ships a first-run installer that does everything:
+
+```bash
+git clone https://github.com/SliverFold/LLM-Manager.git
+cd LLM-Manager
+./setup.sh
+```
+
+`setup.sh` creates the Python venv, installs dependencies, builds the frontend,
+installs the systemd **user** services (backend :9000, frontend :3000), enables
+them, and turns on linger so they survive logout. The UI is then at
+**http://127.0.0.1:3000**.
+
+### Requirements
 
 - Python 3.8+
 - Node.js 18+
-- GPU（NVIDIA with CUDA 或 AMD ROCm）
-- 至少一个 LLM 推理后端已安装（vLLM、Ollama、LM Studio、llama.cpp）
-- nvidia-smi 或 rocm-smi 可用
+- GPU (NVIDIA with CUDA or AMD ROCm)
+- At least one LLM inference backend installed (vLLM, Ollama, LM Studio, llama.cpp)
+- `nvidia-smi` or `rocm-smi` available
 
-### 安装依赖
+### Install dependencies (manual)
 
-后端依赖：
+Backend:
 ```bash
 pip install flask flask-cors psutil
 ```
 
-前端依赖：
+Frontend:
 ```bash
 cd frontend
 npm ci
 ```
 
-### 配置服务
+### Configure services
 
-1. 复制配置文件示例：
+1. Copy the example config:
 
 ```bash
 cp config/services.json.example config/services.json
 ```
 
-2. 编辑 `config/services.json`，配置你的模型服务：
+2. Edit `config/services.json` to describe your model services:
 
 ```json
 {
     "service_key": {
-        "name": "模型名称",
+        "name": "Model name",
         "port": 8000,
         "start_script": "/path/to/start_script.sh",
         "stop_script": "/path/to/stop_script.sh",
@@ -82,7 +97,11 @@ cp config/services.json.example config/services.json
 }
 ```
 
-### 构建前端
+> **Note:** the backend loads `config/services.json` only at startup — restart
+> the backend after editing it (the UI has a "Restart Manager" button in the
+> sidebar footer).
+
+### Build the frontend
 
 ```bash
 cd frontend
@@ -90,64 +109,63 @@ API_URL=http://localhost:9000 npm run build
 cd ..
 ```
 
-### 启动管理系统
+> The Next.js standalone build does **not** copy `static`/`public` into the
+> bundle by itself — `setup.sh` and `deploy-frontend.sh` do this for you.
 
-启动后端：
+### Start the manager
+
+Backend:
 ```bash
 python3 app.py
 ```
 
-启动前端（新终端）：
+Frontend (new terminal):
 ```bash
 cd frontend/.next/standalone
 node server.js
 ```
 
-访问地址：
-- **前端界面**: http://localhost:3000
-- **后端 API**: http://localhost:9000
+Endpoints:
+- **UI**: http://localhost:3000
+- **Backend API**: http://localhost:9000
 
-### 使用 systemd 管理（推荐）
+### Manage with systemd (recommended)
 
-安装服务：
+The repo ships system units (`vllm-manager-{backend,frontend}.service`, root
+paths) and user-unit templates (`vllm-manager-{backend,frontend}.service.user`,
+with `@REPO@` placeholders). `setup.sh` installs the user units automatically.
+To use the system units manually:
+
 ```bash
-# 复制服务文件到 systemd 目录
 sudo cp vllm-manager-backend.service /etc/systemd/system/
 sudo cp vllm-manager-frontend.service /etc/systemd/system/
-
-# 重新加载 systemd
 sudo systemctl daemon-reload
-
-# 启动服务
-sudo systemctl start vllm-manager-backend
-sudo systemctl start vllm-manager-frontend
-
-# 设置开机自启
-sudo systemctl enable vllm-manager-backend
-sudo systemctl enable vllm-manager-frontend
+sudo systemctl start vllm-manager-backend vllm-manager-frontend
+sudo systemctl enable vllm-manager-backend vllm-manager-frontend
 ```
 
-查看服务状态：
+Check status:
 ```bash
 sudo systemctl status vllm-manager-backend
 sudo systemctl status vllm-manager-frontend
 ```
 
-## 配置说明
+## Configuration
 
-### 服务配置项
+### Service fields
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `name` | string | 服务显示名称 |
-| `port` | int | 服务监听端口 |
-| `start_script` | string | 启动脚本的绝对路径 |
-| `stop_script` | string | 停止脚本的绝对路径 |
-| `log_file` | string | 日志文件的绝对路径 |
-| `process_pattern` | string | 用于识别进程的正则表达式 |
-| `gpus` | array | 服务使用的 GPU 编号列表 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Display name of the service |
+| `port` | int | Port the service listens on |
+| `start_script` | string | Absolute path to the start script |
+| `stop_script` | string | Absolute path to the stop script |
+| `log_file` | string | Absolute path to the log file |
+| `process_pattern` | string | Regex used to identify the running process |
+| `gpus` | array | List of GPU indices the service uses |
+| `loader` | string | Backend loader (`vllm`, `ollama`, `lmstudio`, `llama_cpp`) |
 
-### 配置示例
+### Example
 
 ```json
 {
@@ -172,42 +190,42 @@ sudo systemctl status vllm-manager-frontend
 }
 ```
 
-## 界面预览
+## UI Overview
 
-### 主界面
+### Main dashboard
 
-- **系统资源监控面板** - 显示 CPU、内存、磁盘使用情况
-- **GPU 状态卡片** - 每个 GPU 的详细信息（利用率、显存、温度、功耗）
-- **服务管理卡片** - 每个服务的状态和控制按钮
+- **System resources panel** — CPU, memory, disk usage
+- **GPU status cards** — per-GPU details (utilization, VRAM, temperature, power)
+- **Service cards** — status and controls per service
 
-### 服务卡片信息
+### Service card info
 
-运行中的服务显示：
-- 进程 PID
-- CPU 使用率
-- 内存占用
-- GPU 显存占用
-- 启动时间
+A running service shows:
+- Process PID
+- CPU usage
+- Memory usage
+- GPU VRAM usage
+- Start time
 
-### 操作按钮
+### Action buttons
 
-- **启动** - 启动模型服务
-- **停止** - 停止模型服务
-- **日志** - 查看服务日志（最近 200 行）
+- **Start** — start the model service
+- **Stop** — stop the model service
+- **Logs** — view the service log (last 200 lines)
 
-## API 文档
+## API Reference
 
-### 获取所有服务状态
+### Get all service statuses
 
 ```http
 GET /api/services
 ```
 
-响应示例：
+Example response:
 ```json
 {
     "service_key": {
-        "name": "模型名称",
+        "name": "Model name",
         "port": 8000,
         "gpus": [0, 1],
         "status": "running",
@@ -220,13 +238,13 @@ GET /api/services
 }
 ```
 
-### 获取 GPU 信息
+### Get GPU info
 
 ```http
 GET /api/gpu
 ```
 
-响应示例：
+Example response:
 ```json
 [
     {
@@ -242,13 +260,13 @@ GET /api/gpu
 ]
 ```
 
-### 获取系统信息
+### Get system info
 
 ```http
 GET /api/system
 ```
 
-响应示例：
+Example response:
 ```json
 {
     "cpu_percent": 45.2,
@@ -261,95 +279,101 @@ GET /api/system
 }
 ```
 
-### 启动服务
+### Start a service
 
 ```http
 POST /api/service/{service_key}/start
 ```
 
-响应示例：
+Example response:
 ```json
 {
     "success": true,
-    "message": "服务启动成功",
+    "message": "Service started successfully",
     "output": "..."
 }
 ```
 
-### 停止服务
+### Stop a service
 
 ```http
 POST /api/service/{service_key}/stop
 ```
 
-响应示例：
+Example response:
 ```json
 {
     "success": true,
-    "message": "服务停止成功",
+    "message": "Service stopped successfully",
     "output": "..."
 }
 ```
 
-### 获取服务日志
+### Get service logs
 
 ```http
 GET /api/service/{service_key}/logs?lines=100
 ```
 
-参数：
-- `lines` (可选): 返回的日志行数，默认 100
+Parameters:
+- `lines` (optional): number of log lines to return, default 100
 
-响应示例：
+Example response:
 ```json
 {
     "success": true,
-    "logs": "日志内容..."
+    "logs": "log content..."
 }
 ```
 
-## 项目结构
+## Project structure
 
 ```
 vllm-model-manager/
-├── app.py                           # Flask 后端主程序
-├── frontend/                        # Next.js 前端应用
+├── app.py                           # Flask backend
+├── loaders/                         # backend loader registry (vllm/ollama/lmstudio/llama_cpp)
+├── frontend/                        # Next.js frontend
 │   ├── app/                        # Next.js App Router
-│   ├── components/                 # React 组件
-│   ├── hooks/                      # React Hooks
-│   ├── lib/                        # 工具函数
-│   └── package.json                # 前端依赖
+│   ├── components/                 # React components
+│   ├── hooks/                      # React hooks
+│   ├── lib/                        # utilities + i18n
+│   └── package.json                # frontend dependencies
 ├── config/
-│   ├── services.json               # 服务配置文件
-│   └── services.json.example       # 配置文件示例
-├── vllm-manager-backend.service    # 后端 systemd 服务文件
-├── vllm-manager-frontend.service   # 前端 systemd 服务文件
-├── requirements.txt                # Python 依赖
-├── .gitignore                      # Git 忽略文件
-├── LICENSE                         # 开源协议
-└── README.md                       # 项目文档
+│   ├── services.json               # service configuration
+│   └── services.json.example       # example configuration
+├── scripts/                          # start/stop wrappers for the services
+├── vllm-manager-backend.service    # backend systemd unit (system)
+├── vllm-manager-frontend.service   # frontend systemd unit (system)
+├── vllm-manager-backend.service.user   # backend user-unit template
+├── vllm-manager-frontend.service.user  # frontend user-unit template
+├── setup.sh                        # first-run installer (venv + build + user units)
+├── deploy-frontend.sh              # frontend build + deploy + restart
+├── requirements.txt                # Python dependencies
+├── .gitignore                      # Git ignore file
+├── LICENSE                         # open-source license
+└── README.md                       # this document
 ```
 
-## 部署建议
+## Deployment notes
 
-### 生产环境部署
+### Production deployment
 
-1. **构建前端**：
+1. **Build the frontend**:
 ```bash
 cd frontend
 API_URL=http://your-server-ip:9000 npm run build
 ```
 
-2. **配置 systemd 服务**：项目已包含服务文件 `vllm-manager-backend.service` 和 `vllm-manager-frontend.service`
+2. **Configure systemd services**: the repo includes the unit files `vllm-manager-backend.service` and `vllm-manager-frontend.service`
 
-3. **安装并启动服务**：
+3. **Install and start the services**:
 ```bash
 sudo cp vllm-manager-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now vllm-manager-backend vllm-manager-frontend
 ```
 
-### 使用 Nginx 反向代理
+### Nginx reverse proxy
 
 ```nginx
 server {
@@ -365,14 +389,14 @@ server {
 }
 ```
 
-### 添加基础认证
+### Adding basic auth
 
-安装 `flask-httpauth`：
+Install `flask-httpauth`:
 ```bash
 pip install flask-httpauth
 ```
 
-在 `app.py` 中添加：
+Add to `app.py`:
 ```python
 from flask_httpauth import HTTPBasicAuth
 
@@ -387,81 +411,85 @@ def verify_password(username, password):
     if username in users and users[username] == password:
         return username
 
-# 在路由上添加 @auth.login_required 装饰器
+# Add the @auth.login_required decorator to your routes
 ```
 
-## 安全建议
+## Security recommendations
 
-1. **防火墙配置** - 限制管理端口的访问
-2. **使用 HTTPS** - 配置 SSL 证书
-3. **添加认证** - 使用 HTTP 基础认证或 OAuth
-4. **定期更新** - 及时更新依赖包
-5. **日志审计** - 记录所有操作日志
+1. **Firewall** — restrict access to the management ports
+2. **Use HTTPS** — configure an SSL certificate
+3. **Add authentication** — HTTP basic auth or OAuth
+4. **Keep up to date** — update dependencies regularly
+5. **Audit logs** — record all operations
 
-## 常见问题
+## FAQ
 
-### Q: 为什么 GPU 信息无法显示？
+### Q: Why don't GPU details show up?
 
-A: 确保 `nvidia-smi` 命令可用，并且当前用户有权限执行该命令。
+A: Make sure `nvidia-smi` (or `rocm-smi` on AMD) is available and the current
+user can run it.
 
-### Q: 服务启动失败怎么办？
+### Q: A service fails to start — what do I check?
 
-A: 检查以下几点：
-- 启动脚本路径是否正确
-- 启动脚本是否有执行权限
-- GPU 是否被其他进程占用
-- 端口是否被占用
-- 查看服务日志获取详细错误信息
+A: Check the following:
+- Is the start script path correct?
+- Does the start script have execute permission?
+- Is the GPU in use by another process?
+- Is the port already taken?
+- Check the service log for detailed error messages
 
-### Q: 如何添加新的服务？
+### Q: How do I add a new service?
 
-A: 在 `config/services.json` 中添加新的服务配置，然后重启管理系统。
+A: Add a new entry to `config/services.json`, then restart the manager.
+You can also use the "Add Service" wizard in the UI, which generates the
+config entry and start/stop scripts for you.
 
-### Q: 可以管理非 vLLM 服务吗？
+### Q: Can I manage non-vLLM services?
 
-A: 可以！只需要提供对应的启动/停止脚本和进程识别模式即可。
+A: Yes — anything with a start/stop script and a process pattern works
+(vLLM, Ollama, LM Studio, llama.cpp, and more).
 
-## 开发计划
+## Development plans
 
-- [ ] 添加用户认证系统
-- [ ] 性能图表和历史数据
-- [ ] 邮件/钉钉告警通知
-- [ ] API 密钥管理
-- [ ] 多节点支持
-- [ ] 服务健康检查
-- [ ] 自动故障恢复
+- [ ] User authentication
+- [ ] Performance charts and historical data
+- [ ] Email/Slack alert notifications
+- [ ] API key management
+- [ ] Multi-node support
+- [ ] Service health checks
+- [ ] Automatic failure recovery
 
-## 贡献指南
+## Contributing
 
-欢迎提交 Issue 和 Pull Request！
+Issues and pull requests are welcome!
 
-1. Fork 本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+1. Fork this project
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a pull request
 
-## 许可证
+## License
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file.
 
-## 致谢
+## Acknowledgments
 
-- [Flask](https://flask.palletsprojects.com/) - Web 框架
-- [vLLM](https://github.com/vllm-project/vllm) - 大语言模型推理引擎
-- [psutil](https://github.com/giampaolo/psutil) - 系统和进程工具
+- [Flask](https://flask.palletsprojects.com/) — web framework
+- [vLLM](https://github.com/vllm-project/vllm) — LLM inference engine
+- [psutil](https://github.com/giampaolo/psutil) — system and process utilities
 
-## 联系方式
+## Contact
 
-如有问题或建议，欢迎提交 Issue 或通过以下方式联系：
+For issues or suggestions, please open an Issue:
 
-- GitHub Issues: [项目 Issues 页面](https://github.com/yourusername/vllm-model-manager/issues)
+- GitHub Issues: [Issues page](https://github.com/SliverFold/LLM-Manager/issues)
 
 ---
 
 <div align="center">
 
-**[⬆ 回到顶部](#vllm-model-manager)**
+**[⬆ Back to top](#llm-model-manager)**
 
 Made with ❤️ for the AI community
 
