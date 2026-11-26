@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import { getApiUrl } from '@/lib/api-config';
 import { useLang } from '@/lib/i18n';
-import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon, Sparkles, Brain } from 'lucide-react';
+import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon, Sparkles, Brain, ChevronDown } from 'lucide-react';
 
 interface InstallerStatus {
   system: {
@@ -46,6 +46,53 @@ interface InstallerStatus {
   jobs: { kind: string; status: string; log_file: string; started_at: string }[];
 }
 
+// A collapsible installer card: the header (icon + title + status badge +
+// chevron) is always visible and clickable; clicking it toggles the full
+// content. Collapsed cards show only the minimal "installed / not installed"
+// status so the section stays clean.
+function CollapsibleCard({
+  icon,
+  title,
+  headerRight,
+  statusBadges,
+  expanded,
+  onToggle,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  headerRight?: React.ReactNode;
+  statusBadges: React.ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader className="cursor-pointer select-none" onClick={onToggle}>
+        <CardTitle className="flex items-center gap-2 justify-between">
+          <span className="flex items-center gap-2">
+            {icon}
+            {title}
+          </span>
+          <span className="flex items-center gap-2">
+            {headerRight}
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          </span>
+        </CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          {statusBadges}
+        </div>
+      </CardHeader>
+      {expanded && (
+        <CardContent className="space-y-4">
+          {children}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 export function InstallerSection() {
   const { t } = useLang();
   const [status, setStatus] = useState<InstallerStatus | null>(null);
@@ -65,6 +112,15 @@ export function InstallerSection() {
   const [logStatus, setLogStatus] = useState('running');
   const [restartingGateway, setRestartingGateway] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Which installer cards are expanded (collapsed by default for a cleaner look).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleCard = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // Poll the detection status (venv changes what we check for vLLM).
   useEffect(() => {
@@ -256,6 +312,7 @@ export function InstallerSection() {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
       className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
     >
       <ExternalLink className="h-3 w-3" />
@@ -273,146 +330,136 @@ export function InstallerSection() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* left column: vLLM + LM Studio stacked */}
         <div className="flex flex-col gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 justify-between">
-              <span className="flex items-center gap-2">
-                <Cpu className="h-4 w-4 text-primary" />
-                vLLM
-              </span>
-              {siteLink('https://github.com/vllm-project/vllm')}
-            </CardTitle>
-            <CardDescription>{t('inst.vllmDesc')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {sys && (
-                <Badge variant="secondary">
-                  {sys.vendor === 'amd'
-                    ? 'AMD GPU'
-                    : sys.vendor === 'nvidia'
-                      ? `NVIDIA ${sys.vendor_detail}`
-                      : t('inst.noGpuStack')}
-                </Badge>
-              )}
-              {vllm?.installed ? (
-                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                  <CheckCircle2 className="mr-1 h-3 w-3" />
-                  {t('inst.installed')} {vllm.version}
-                </Badge>
-              ) : (
-                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
-              )}
-              {vllm?.installed && vllm.rocm_version && (
-                <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400">
-                  {t('inst.rocmVersion')} {vllm.rocm_version}
-                </Badge>
-              )}
-              {sys && <span className="text-xs text-muted-foreground">{sys.disk_free_gb} GB free</span>}
-            </div>
+        <CollapsibleCard
+          icon={<Cpu className="h-4 w-4 text-primary" />}
+          title="vLLM"
+          headerRight={siteLink('https://github.com/vllm-project/vllm')}
+          statusBadges={
+            vllm?.installed ? (
+              <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+                {t('inst.installed')} {vllm.version}
+              </Badge>
+            ) : (
+              <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+            )
+          }
+          expanded={expanded.has('vllm')}
+          onToggle={() => toggleCard('vllm')}
+        >
+          <CardDescription>{t('inst.vllmDesc')}</CardDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            {sys && (
+              <Badge variant="secondary">
+                {sys.vendor === 'amd'
+                  ? 'AMD GPU'
+                  : sys.vendor === 'nvidia'
+                    ? `NVIDIA ${sys.vendor_detail}`
+                    : t('inst.noGpuStack')}
+              </Badge>
+            )}
+            {vllm?.installed && vllm.rocm_version && (
+              <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                {t('inst.rocmVersion')} {vllm.rocm_version}
+              </Badge>
+            )}
+            {sys && <span className="text-xs text-muted-foreground">{sys.disk_free_gb} GB free</span>}
+          </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">{t('inst.venvLabel')}</label>
-              <input
-                value={venv}
-                onChange={(e) => setVenv(e.target.value)}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-                placeholder="~/vllm-venv"
-              />
-            </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">{t('inst.venvLabel')}</label>
+            <input
+              value={venv}
+              onChange={(e) => setVenv(e.target.value)}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+              placeholder="~/vllm-venv"
+            />
+          </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-muted-foreground">{t('inst.channelLabel')}</label>
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant={channel === 'nightly' ? 'default' : 'outline'}
-                  onClick={() => setChannel('nightly')}
-                >
-                  {t('inst.nightly')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant={channel === 'stable' ? 'default' : 'outline'}
-                  onClick={() => setChannel('stable')}
-                >
-                  {t('inst.stable')}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">{t('inst.channelNote')}</p>
-              {sys?.vendor === 'amd' && (
-                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={paiton}
-                    onChange={(e) => setPaiton(e.target.checked)}
-                    className="h-3 w-3 rounded border-input mt-0.5"
-                  />
-                  <span>
-                    {t('inst.paiton')}
-                    <span className="block text-muted-foreground/70">{t('inst.paitonHint')}</span>
-                  </span>
-                </label>
-              )}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">{t('inst.channelLabel')}</label>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant={channel === 'nightly' ? 'default' : 'outline'}
+                onClick={() => setChannel('nightly')}
+              >
+                {t('inst.nightly')}
+              </Button>
+              <Button
+                size="sm"
+                variant={channel === 'stable' ? 'default' : 'outline'}
+                onClick={() => setChannel('stable')}
+              >
+                {t('inst.stable')}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('inst.channelNote')}</p>
+            {sys?.vendor === 'amd' && (
               <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={qwenTools}
-                  onChange={(e) => setQwenTools(e.target.checked)}
+                  checked={paiton}
+                  onChange={(e) => setPaiton(e.target.checked)}
                   className="h-3 w-3 rounded border-input mt-0.5"
                 />
                 <span>
-                  {t('inst.qwenTools')}
-                  <span className="block text-muted-foreground/70">{t('inst.qwenToolsHint')}</span>
+                  {t('inst.paiton')}
+                  <span className="block text-muted-foreground/70">{t('inst.paitonHint')}</span>
                 </span>
               </label>
-            </div>
+            )}
+            <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={qwenTools}
+                onChange={(e) => setQwenTools(e.target.checked)}
+                className="h-3 w-3 rounded border-input mt-0.5"
+              />
+              <span>
+                {t('inst.qwenTools')}
+                <span className="block text-muted-foreground/70">{t('inst.qwenToolsHint')}</span>
+              </span>
+            </label>
+          </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null}>
-                  <Download className="h-3 w-3 mr-1" />
-                  {installing === 'vllm' ? t('inst.installing') : t('inst.install')}
-                </Button>
-                {vllm?.installed && (
-                  <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null}>
-                    <Trash2 className="h-3 w-3 mr-1" />
-                    {uninstalling === 'vllm' ? t('inst.uninstalling') : t('inst.uninstall')}
-                  </Button>
-                )}
-                {vllm?.installed && (
-                  <span className="text-xs text-muted-foreground font-mono truncate">{vllm.venv}</span>
-                )}
-              </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null}>
+                <Download className="h-3 w-3 mr-1" />
+                {installing === 'vllm' ? t('inst.installing') : t('inst.install')}
+              </Button>
               {vllm?.installed && (
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={removeVenv}
-                    onChange={(e) => setRemoveVenv(e.target.checked)}
-                    className="h-3 w-3 rounded border-input"
-                  />
-                  {t('inst.removeVenv')}
-                </label>
+                <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null}>
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  {uninstalling === 'vllm' ? t('inst.uninstalling') : t('inst.uninstall')}
+                </Button>
+              )}
+              {vllm?.installed && (
+                <span className="text-xs text-muted-foreground font-mono truncate">{vllm.venv}</span>
               )}
             </div>
-          </CardContent>
-        </Card>
+            {vllm?.installed && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={removeVenv}
+                  onChange={(e) => setRemoveVenv(e.target.checked)}
+                  className="h-3 w-3 rounded border-input"
+                />
+                {t('inst.removeVenv')}
+              </label>
+            )}
+          </div>
+        </CollapsibleCard>
 
         {/* LM Studio + Beledarian Suite card */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 justify-between">
-              <span className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-primary" />
-                {t('inst.lmsTitle')}
-              </span>
-              {siteLink('https://lmstudio.ai')}
-            </CardTitle>
-            <CardDescription>{t('inst.lmsDesc')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
+        <CollapsibleCard
+          icon={<Sparkles className="h-4 w-4 text-primary" />}
+          title={t('inst.lmsTitle')}
+          headerRight={siteLink('https://lmstudio.ai')}
+          statusBadges={
+            <>
               {lms?.installed ? (
                 <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                   <CheckCircle2 className="mr-1 h-3 w-3" />
@@ -429,225 +476,216 @@ export function InstallerSection() {
               ) : (
                 <Badge variant="secondary">{t('inst.lmsSuiteMissing')}</Badge>
               )}
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => startInstall('lmstudio')} disabled={installing !== null || uninstalling !== null}>
-                <Download className="h-3 w-3 mr-1" />
-                {installing === 'lmstudio' ? t('inst.installing') : t('inst.install')}
+            </>
+          }
+          expanded={expanded.has('lmstudio')}
+          onToggle={() => toggleCard('lmstudio')}
+        >
+          <CardDescription>{t('inst.lmsDesc')}</CardDescription>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button onClick={() => startInstall('lmstudio')} disabled={installing !== null || uninstalling !== null}>
+              <Download className="h-3 w-3 mr-1" />
+              {installing === 'lmstudio' ? t('inst.installing') : t('inst.install')}
+            </Button>
+            {lms?.installed && (
+              <Button variant="destructive" onClick={() => startUninstall('lmstudio')} disabled={uninstalling !== null || installing !== null}>
+                <Trash2 className="h-3 w-3 mr-1" />
+                {uninstalling === 'lmstudio' ? t('inst.uninstalling') : t('inst.uninstall')}
               </Button>
-              {lms?.installed && (
-                <Button variant="destructive" onClick={() => startUninstall('lmstudio')} disabled={uninstalling !== null || installing !== null}>
-                  <Trash2 className="h-3 w-3 mr-1" />
-                  {uninstalling === 'lmstudio' ? t('inst.uninstalling') : t('inst.uninstall')}
-                </Button>
-              )}
-              {lms?.installed && (
-                <span className="text-xs text-muted-foreground font-mono truncate">{lms.lms}</span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+            )}
+            {lms?.installed && (
+              <span className="text-xs text-muted-foreground font-mono truncate">{lms.lms}</span>
+            )}
+          </div>
+        </CollapsibleCard>
         </div>
 
         {/* right column: Hermes (compact) + ComfyUI stacked */}
         <div className="flex flex-col gap-6">
           {/* Hermes webapp card (compact) */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 justify-between">
-                <span className="flex items-center gap-2">
-                  <Bot className="h-4 w-4 text-primary" />
-                  {t('inst.hermesTitle')}
-                </span>
-                {siteLink('https://hermes-agent.nousresearch.com')}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {hermes?.installed ? (
-                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
-                    {t('inst.installed')} {hermes.version}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline">{t('inst.notInstalled')}</Badge>
-                )}
-                {hermes && (
-                  <>
-                    {hermes.webapp_enabled === true && <Badge variant="secondary">{t('inst.webappEnabled')}</Badge>}
-                    {hermes.webapp_reachable && (
-                      <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{t('inst.webappUp')}</Badge>
-                    )}
-                  </>
-                )}
-              </div>
+          <CollapsibleCard
+            icon={<Bot className="h-4 w-4 text-primary" />}
+            title={t('inst.hermesTitle')}
+            headerRight={siteLink('https://hermes-agent.nousresearch.com')}
+            statusBadges={
+              hermes?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.installed')} {hermes.version}
+                </Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )
+            }
+            expanded={expanded.has('hermes')}
+            onToggle={() => toggleCard('hermes')}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {hermes && (
+                <>
+                  {hermes.webapp_enabled === true && <Badge variant="secondary">{t('inst.webappEnabled')}</Badge>}
+                  {hermes.webapp_reachable && (
+                    <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{t('inst.webappUp')}</Badge>
+                  )}
+                </>
+              )}
+            </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button onClick={() => startInstall('hermes')} disabled={installing !== null}>
-                  <Download className="h-3 w-3 mr-1" />
-                  {installing === 'hermes' ? t('inst.installing') : t('inst.install')}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => startInstall('hermes')} disabled={installing !== null}>
+                <Download className="h-3 w-3 mr-1" />
+                {installing === 'hermes' ? t('inst.installing') : t('inst.install')}
+              </Button>
+              {hermes?.installed && (
+                <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
+                  {t('inst.restartGateway')}
                 </Button>
-                {hermes?.installed && (
-                  <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
-                    <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
-                    {t('inst.restartGateway')}
-                  </Button>
-                )}
-                {hermes?.installed && hermes.webapp_enabled === true && (
-                  <Button variant="outline" onClick={() => startUninstall('hermes')} disabled={uninstalling !== null || installing !== null}>
-                    <XCircle className="h-3 w-3 mr-1" />
-                    {uninstalling === 'hermes' ? t('inst.uninstalling') : t('inst.disableWebapp')}
-                  </Button>
-                )}
-                {hermes?.webapp_reachable && (
-                  <Button variant="ghost" size="sm" onClick={openWebUi}>
-                    <ExternalLink className="h-3 w-3 mr-1" />
-                    {t('inst.openWebUi')}
-                  </Button>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+              )}
+              {hermes?.installed && hermes.webapp_enabled === true && (
+                <Button variant="outline" onClick={() => startUninstall('hermes')} disabled={uninstalling !== null || installing !== null}>
+                  <XCircle className="h-3 w-3 mr-1" />
+                  {uninstalling === 'hermes' ? t('inst.uninstalling') : t('inst.disableWebapp')}
+                </Button>
+              )}
+              {hermes?.webapp_reachable && (
+                <Button variant="ghost" size="sm" onClick={openWebUi}>
+                  <ExternalLink className="h-3 w-3 mr-1" />
+                  {t('inst.openWebUi')}
+                </Button>
+              )}
+            </div>
+          </CollapsibleCard>
 
           {/* OpenViking — Hermes long-term memory (compact) */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 justify-between">
-                <span className="flex items-center gap-2">
-                  <Brain className="h-4 w-4 text-primary" />
-                  {t('inst.ovTitle')}
-                </span>
-                {siteLink('https://github.com/volcengine/OpenViking')}
-              </CardTitle>
-              <CardDescription>{t('inst.ovDesc')}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {ov?.installed ? (
-                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
-                    {t('inst.installed')}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline">{t('inst.notInstalled')}</Badge>
-                )}
-                {ov && (
-                  <>
-                    {ov.server && (
-                      <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                        {t('inst.ovServer')} {ov.server_version || ''}
-                      </Badge>
-                    )}
-                    {ov.embed && <Badge variant="secondary">{t('inst.ovEmbed')}</Badge>}
-                    {ov.plugin ? (
-                      <Badge variant="secondary">{t('inst.ovPlugin')}</Badge>
-                    ) : (
-                      <Badge variant="outline">{t('inst.ovPluginMissing')}</Badge>
-                    )}
-                    {ov.hermes_configured ? (
-                      <Badge className="bg-violet-500/15 text-violet-600 dark:text-violet-400">{t('inst.ovHermes')}</Badge>
-                    ) : (
-                      <Badge variant="outline">{t('inst.ovHermesMissing')}</Badge>
-                    )}
-                  </>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button onClick={() => startInstall('openviking')} disabled={installing !== null || uninstalling !== null}>
-                  <Download className="h-3 w-3 mr-1" />
-                  {installing === 'openviking' ? t('inst.installing') : t('inst.install')}
-                </Button>
-                {ov?.installed && (
-                  <Button variant="destructive" onClick={() => startUninstall('openviking')} disabled={uninstalling !== null || installing !== null}>
-                    <Trash2 className="h-3 w-3 mr-1" />
-                    {uninstalling === 'openviking' ? t('inst.uninstalling') : t('inst.uninstall')}
-                  </Button>
-                )}
-                {ov?.installed && (
-                  <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
-                    <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
-                    {t('inst.restartGateway')}
-                  </Button>
-                )}
-              </div>
-              {ov?.installed && (
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={removeWorkspace}
-                    onChange={(e) => setRemoveWorkspace(e.target.checked)}
-                    className="h-3 w-3 rounded border-input"
-                  />
-                  {t('inst.ovRemoveWorkspace')}
-                </label>
+          <CollapsibleCard
+            icon={<Brain className="h-4 w-4 text-primary" />}
+            title={t('inst.ovTitle')}
+            headerRight={siteLink('https://github.com/volcengine/OpenViking')}
+            statusBadges={
+              ov?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.installed')}
+                </Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )
+            }
+            expanded={expanded.has('openviking')}
+            onToggle={() => toggleCard('openviking')}
+          >
+            <CardDescription>{t('inst.ovDesc')}</CardDescription>
+            <div className="flex flex-wrap items-center gap-2">
+              {ov && (
+                <>
+                  {ov.server && (
+                    <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                      {t('inst.ovServer')} {ov.server_version || ''}
+                    </Badge>
+                  )}
+                  {ov.embed && <Badge variant="secondary">{t('inst.ovEmbed')}</Badge>}
+                  {ov.plugin ? (
+                    <Badge variant="secondary">{t('inst.ovPlugin')}</Badge>
+                  ) : (
+                    <Badge variant="outline">{t('inst.ovPluginMissing')}</Badge>
+                  )}
+                  {ov.hermes_configured ? (
+                    <Badge className="bg-violet-500/15 text-violet-600 dark:text-violet-400">{t('inst.ovHermes')}</Badge>
+                  ) : (
+                    <Badge variant="outline">{t('inst.ovHermesMissing')}</Badge>
+                  )}
+                </>
               )}
-            </CardContent>
-          </Card>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => startInstall('openviking')} disabled={installing !== null || uninstalling !== null}>
+                <Download className="h-3 w-3 mr-1" />
+                {installing === 'openviking' ? t('inst.installing') : t('inst.install')}
+              </Button>
+              {ov?.installed && (
+                <Button variant="destructive" onClick={() => startUninstall('openviking')} disabled={uninstalling !== null || installing !== null}>
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  {uninstalling === 'openviking' ? t('inst.uninstalling') : t('inst.uninstall')}
+                </Button>
+              )}
+              {ov?.installed && (
+                <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
+                  {t('inst.restartGateway')}
+                </Button>
+              )}
+            </div>
+            {ov?.installed && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={removeWorkspace}
+                  onChange={(e) => setRemoveWorkspace(e.target.checked)}
+                  className="h-3 w-3 rounded border-input"
+                />
+                {t('inst.ovRemoveWorkspace')}
+              </label>
+            )}
+          </CollapsibleCard>
 
           {/* ComfyUI card */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 justify-between">
-                <span className="flex items-center gap-2">
-                  <ImageIcon className="h-4 w-4 text-primary" />
-                  {t('inst.comfyuiTitle')}
-                </span>
-                {siteLink('https://github.com/comfyanonymous/ComfyUI')}
-              </CardTitle>
-              <CardDescription>{t('inst.comfyuiDesc')}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {comfyui?.installed ? (
-                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
-                    {t('inst.installed')}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline">{t('inst.notInstalled')}</Badge>
-                )}
-              </div>
+          <CollapsibleCard
+            icon={<ImageIcon className="h-4 w-4 text-primary" />}
+            title={t('inst.comfyuiTitle')}
+            headerRight={siteLink('https://github.com/comfyanonymous/ComfyUI')}
+            statusBadges={
+              comfyui?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.installed')}
+                </Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )
+            }
+            expanded={expanded.has('comfyui')}
+            onToggle={() => toggleCard('comfyui')}
+          >
+            <CardDescription>{t('inst.comfyuiDesc')}</CardDescription>
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">{t('inst.comfyuiDirLabel')}</label>
+              <input
+                value={comfyDir}
+                onChange={(e) => setComfyDir(e.target.value)}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+                placeholder="~/ComfyUI-plain"
+              />
+            </div>
 
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground">{t('inst.comfyuiDirLabel')}</label>
-                <input
-                  value={comfyDir}
-                  onChange={(e) => setComfyDir(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-                  placeholder="~/ComfyUI-plain"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button onClick={() => startInstall('comfyui')} disabled={installing !== null || uninstalling !== null}>
-                  <Download className="h-3 w-3 mr-1" />
-                  {installing === 'comfyui' ? t('inst.installing') : t('inst.install')}
-                </Button>
-                {comfyui?.installed && (
-                  <Button variant="destructive" onClick={() => startUninstall('comfyui')} disabled={uninstalling !== null || installing !== null}>
-                    <Trash2 className="h-3 w-3 mr-1" />
-                    {uninstalling === 'comfyui' ? t('inst.uninstalling') : t('inst.uninstall')}
-                  </Button>
-                )}
-                {comfyui?.installed && (
-                  <span className="text-xs text-muted-foreground font-mono truncate">{comfyui.dir}</span>
-                )}
-              </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => startInstall('comfyui')} disabled={installing !== null || uninstalling !== null}>
+                <Download className="h-3 w-3 mr-1" />
+                {installing === 'comfyui' ? t('inst.installing') : t('inst.install')}
+              </Button>
               {comfyui?.installed && (
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={removeCheckout}
-                    onChange={(e) => setRemoveCheckout(e.target.checked)}
-                    className="h-3 w-3 rounded border-input"
-                  />
-                  {t('inst.comfyuiRemoveCheckout')}
-                </label>
+                <Button variant="destructive" onClick={() => startUninstall('comfyui')} disabled={uninstalling !== null || installing !== null}>
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  {uninstalling === 'comfyui' ? t('inst.uninstalling') : t('inst.uninstall')}
+                </Button>
               )}
-            </CardContent>
-          </Card>
+              {comfyui?.installed && (
+                <span className="text-xs text-muted-foreground font-mono truncate">{comfyui.dir}</span>
+              )}
+            </div>
+            {comfyui?.installed && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={removeCheckout}
+                  onChange={(e) => setRemoveCheckout(e.target.checked)}
+                  className="h-3 w-3 rounded border-input"
+                />
+                {t('inst.comfyuiRemoveCheckout')}
+              </label>
+            )}
+          </CollapsibleCard>
         </div>
       </div>
 
