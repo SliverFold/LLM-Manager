@@ -69,13 +69,56 @@ The **Installers** section at the bottom of the page installs:
 
 - **vLLM** — the fast LLM inference engine. The installer picks the right
   wheels for your GPU (AMD ROCm or NVIDIA CUDA). On AMD you can also add the
-  Paiton plugin for faster quantized-model performance.
+  Paiton plugin for faster quantized-model performance, and optionally the
+  Qwen tools (Qwen-Agent + Qwen Code, pointed at your local endpoint).
 - **Hermes Agent + Web UI** — the AI assistant and its browser workspace
   (port 9120).
-- **ComfyUI** — the AI image/video generation framework.
+- **OpenViking — Hermes memory** — long-term memory for Hermes: the
+  OpenViking server (port 1934), a CPU embedding service (bge-small-en-v1.5
+  GGUF via llama.cpp, port 8091, zero VRAM), the Hermes memory plugin, and the
+  Hermes memory-provider config. Everything runs as systemd user services
+  with auto-restart.
+- **ComfyUI** — the AI image/video generation framework. Once installed,
+  the ComfyUI card (below the services section) has **Start** / **Stop**
+  buttons: Start opens a GPU picker so you choose which card to run on, and
+  **Open UI** opens the web interface in a new tab.
+- **LM Studio + Beledarian Suite** — the LM Studio app (any Linux distro)
+  plus Beledarian's Toolbox, the agentic AI suite of LLM tools.
 
-Each card shows whether the tool is already installed, and you can uninstall
-it the same way. Watch the live install log in a dialog while it runs.
+Each card shows whether the tool is already installed, and a small
+**Website** link opens the project's site in a new tab so you can see what
+a tool is before installing it.
+
+### Uninstall tools
+
+Every card has an **Uninstall** button (with a confirmation dialog) that
+reverses the install:
+
+- **vLLM** — removes the venv and its packages (tick "delete the venv" to
+  also delete the folder).
+- **Hermes** — "uninstall" safely disables the webapp without removing the
+  running agent.
+- **OpenViking** — stops and removes the server + embedding services and the
+  Hermes plugin, and resets the Hermes memory config. Your memory data
+  (`~/.openviking`) is kept unless you tick "delete the memory data".
+- **ComfyUI** — removes the venv and its packages (tick "delete the
+  checkout" to also remove the checkout with custom nodes, outputs, configs).
+- **LM Studio + Beledarian Suite** — removes the app and the Beledarian
+  Suite clone. Your models (`~/.lmstudio/models`) and settings are kept.
+
+### Uninstall the manager itself
+
+To remove the manager (reverses `setup.sh`), run from the repo folder:
+
+```bash
+./uninstall_manager.sh            # stop + disable services, remove units
+./uninstall_manager.sh --remove-venv   # also delete the Python venv
+```
+
+This does **not** delete the repo itself (your clone, `config/`, and
+`services.json`) — remove the folder manually for a full wipe. Installed AI
+tools (vLLM venvs, Hermes, ComfyUI, LM Studio) and your models are never
+touched.
 
 ---
 
@@ -91,10 +134,9 @@ it the same way. Watch the live install log in a dialog while it runs.
 Anything with a start/stop script and a port works — the backends above get
 extra integration (model scanning, chat, etc.).
 
-> **Note:** the in-UI **Installers** section covers vLLM, Hermes, and
-> ComfyUI. Ollama, LM Studio, and llama.cpp are supported as backends but
-> installed separately (LM Studio is a downloadable app, Ollama is a single
-> command — see their websites).
+> **Note:** the in-UI **Installers** section covers vLLM, Hermes, ComfyUI,
+> and LM Studio + Beledarian Suite. Ollama and llama.cpp are supported as
+> backends but installed separately (see their websites).
 
 ---
 
@@ -183,7 +225,8 @@ The **Add Service** dialog in the UI generates entries like this for you.
 | `GET /api/system` | CPU / memory / disk usage |
 | `GET /api/models` | Scan of installed models (HF cache, GGUF dirs, loader APIs) |
 | `GET /api/models/browse?dir=/path` | List a directory (manual model picker) |
-| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui}` · `POST /api/installer/uninstall` | Installers |
+| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking}` · `POST /api/installer/uninstall` (kind: vllm, hermes, comfyui, lmstudio, openviking) | Installers |
+| `GET /api/comfyui/status` · `POST /api/comfyui/start` (body: `{"gpu": <index>}`) · `POST /api/comfyui/stop` · `GET /api/comfyui/logs` | ComfyUI start/stop + logs |
 | `GET /api/hermes/webapp-link?profile=<name>` | One-use link to the Hermes web UI |
 
 ### Project structure
@@ -201,6 +244,7 @@ LLM-Manager/
 │   └── platform.json          # model scan dirs + ports
 ├── scripts/                   # generated start/stop + installer scripts
 ├── setup.sh                   # first-run installer
+├── uninstall_manager.sh       # removes the manager itself (not the repo)
 └── vllm-manager-*.service     # systemd units (system + user templates)
 ```
 

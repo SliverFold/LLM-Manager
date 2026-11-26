@@ -19,12 +19,13 @@
 #   NVIDIA CUDA:
 #     Latest stable CUDA wheel, torch backend auto-selected from the driver.
 #
-# Usage: install_vllm.sh <venv_dir> <channel> [paiton=true|false]
+# Usage: install_vllm.sh <venv_dir> <channel> [paiton=true|false] [qwentools=true|false]
 set -euo pipefail
 
-VENV="${1:?usage: install_vllm.sh <venv_dir> <channel> [paiton]}"
+VENV="${1:?usage: install_vllm.sh <venv_dir> <channel> [paiton] [qwentools]}"
 CHANNEL="${2:-nightly}"
 PAITON="${3:-false}"
+QWENTOOLS="${4:-false}"
 VENV="$(eval echo "$VENV")"
 mkdir -p "$VENV"
 
@@ -285,6 +286,62 @@ if [ "$PAITON" = "true" ]; then
     fi
     "$VENV/bin/python" -m pip install "$PAITON_REPO" || log "WARNING: paiton plugin install failed"
     log "Paiton plugin installed from $PAITON_REPO"
+  fi
+fi
+
+# --- 5.6. Qwen tools (Qwen-Agent framework + Qwen Code CLI) ---
+# Optional, AMD and NVIDIA alike. Installs Qwen's agent tooling:
+#   - qwen-agent  (pip, into the venv): agent framework — function calling,
+#     MCP client, code interpreter, RAG, Gradio GUI.
+#   - qwen-code   (npm, global): terminal coding agent (Claude Code-style).
+# Also writes ~/.qwen/settings.json pointing Qwen Code at the local vLLM
+# endpoint (default: the big brain on :8000) — never overwrites an existing
+# settings file.
+if [ "$QWENTOOLS" = "true" ]; then
+  log "Installing Qwen tools (qwen-agent + qwen-code)… (may take a while)"
+  "$VENV/bin/python" -m pip install -U "qwen-agent[mcp,code_interpreter]" || log "WARNING: qwen-agent install failed"
+
+  NPM="$(command -v npm || true)"
+  if [ -z "$NPM" ]; then
+    log "WARNING: npm not found — skipping Qwen Code (qwen-agent still installed)"
+  else
+    NODE_MAJOR="$("$NPM" --version >/dev/null 2>&1 && node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    if [ "${NODE_MAJOR:-0}" -lt 22 ]; then
+      log "WARNING: Qwen Code needs Node.js 22+ (found ${NODE_MAJOR:-unknown}) — skipping"
+    else
+      log "Installing Qwen Code CLI (npm)…"
+      "$NPM" install -g @qwen-code/qwen-code@latest || log "WARNING: qwen-code install failed"
+    fi
+  fi
+
+  QWEN_CFG="$HOME/.qwen/settings.json"
+  if [ -f "$QWEN_CFG" ]; then
+    log "Qwen Code settings already exist at $QWEN_CFG — leaving as-is"
+  else
+    mkdir -p "$HOME/.qwen"
+    cat > "$QWEN_CFG" <<'EOF'
+{
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "Qwen3.8" },
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "Qwen3.8",
+        "name": "Qwen3.8 27B (local vLLM :8000)",
+        "baseUrl": "http://127.0.0.1:8000/v1",
+        "envKey": "VLLM_API_KEY",
+        "generationConfig": {
+          "contextWindowSize": 262144,
+          "timeout": 120000,
+          "maxRetries": 2,
+          "samplingParams": { "temperature": 0.6, "top_p": 0.9, "max_tokens": 8192 }
+        }
+      }
+    ]
+  }
+}
+EOF
+    log "Wrote Qwen Code settings: $QWEN_CFG (local vLLM :8000, model Qwen3.8)"
   fi
 fi
 

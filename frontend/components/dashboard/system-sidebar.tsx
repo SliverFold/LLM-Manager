@@ -16,9 +16,11 @@ interface SystemSidebarProps {
   gpus: GPUInfo[] | undefined;
   gpusLoading: boolean;
   services?: Record<string, { name: string; port: number; status: string }>;
+  pollSeconds?: number;
+  onPollSecondsChange?: (n: number) => void;
 }
 
-export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services }: SystemSidebarProps) {
+export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services, pollSeconds, onPollSecondsChange }: SystemSidebarProps) {
   const { t } = useLang();
 
   // The Hermes Webapp signs each browser in with a one-use launch ticket (valid ~60s).
@@ -203,9 +205,27 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
       </button>
 
       <div className="mt-auto pt-6 text-xs text-muted-foreground font-mono border-t border-sidebar-border">
-        <p className="flex justify-between">
+        <p className="flex items-center gap-1.5">
           <span>{t('sidebar.lastUpdated')}</span>
-          <span className="text-foreground">{lastUpdated ? lastUpdated.toLocaleTimeString([], { hour12: false }) : '—'}</span>
+          {onPollSecondsChange && (
+            <span className="flex items-center gap-1 ml-1">
+              {[1, 2, 3].map(n => (
+                <button
+                  key={n}
+                  onClick={() => onPollSecondsChange(n)}
+                  title={t('sidebar.refreshEvery', { n })}
+                  className={`h-5 w-5 rounded-full text-[10px] font-semibold leading-none transition-colors ${
+                    pollSeconds === n
+                      ? 'bg-primary text-primary-foreground'
+                      : 'border border-sidebar-border text-sidebar-foreground hover:bg-sidebar-accent'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </span>
+          )}
+          <span className="ml-auto text-foreground">{lastUpdated ? lastUpdated.toLocaleTimeString([], { hour12: false }) : '—'}</span>
         </p>
         <p className="flex justify-between mt-1">
           <span>{t('sidebar.version')}</span>

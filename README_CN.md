@@ -55,11 +55,34 @@ cd LLM-Manager
 
 页面底部的 **安装器（Installers）** 区域可以安装：
 
-- **vLLM** —— 高性能 LLM 推理引擎。安装器会自动为你的 GPU 选择正确的 wheel（AMD ROCm 或 NVIDIA CUDA）。AMD 用户还可以加装 Paiton 插件，提升量化模型的性能。
+- **vLLM** —— 高性能 LLM 推理引擎。安装器会自动为你的 GPU 选择正确的 wheel（AMD ROCm 或 NVIDIA CUDA）。AMD 用户还可以加装 Paiton 插件（提升量化模型性能），以及可选的 Qwen 工具（Qwen-Agent + Qwen Code，指向本地端点）。
 - **Hermes Agent + Web UI** —— AI 助手及其浏览器工作区（端口 9120）。
-- **ComfyUI** —— AI 图像/视频生成框架。
+- **OpenViking —— Hermes 记忆** —— Hermes 的长期记忆：OpenViking 服务器（端口 1934）、CPU 嵌入服务（bge-small-en-v1.5 GGUF 经 llama.cpp，端口 8091，零 VRAM）、Hermes 记忆插件以及 Hermes 记忆配置。全部以 systemd 用户服务运行，自动重启。
+- **ComfyUI** —— AI 图像/视频生成框架。安装后，ComfyUI 卡片（服务区域下方）有 **启动（Start）** / **停止（Stop）** 按钮：启动时弹出 GPU 选择器让你选择运行在哪张卡上，**打开 UI（Open UI）** 在新标签页中打开 Web 界面。
+- **LM Studio + Beledarian Suite** —— LM Studio 应用（任意 Linux 发行版）外加 Beledarian 工具箱（agentic AI 工具套件）。
 
-每张卡片显示该工具是否已安装，也可以用同样的方式卸载。安装过程中可以在对话框里看实时安装日志。
+每张卡片显示该工具是否已安装，并有一个小的 **Website（网站）** 链接，点击后在新标签页中打开项目官网，安装前可以先看看这个工具是什么。
+
+### 卸载工具
+
+每张卡片都有一个 **卸载（Uninstall）** 按钮（带确认对话框），可以撤销安装：
+
+- **vLLM** —— 移除 venv 及其包（勾选"删除 venv"可一并删除文件夹）。
+- **Hermes** —— "卸载"会安全地禁用 webapp，不会移除正在运行的 agent。
+- **OpenViking** —— 停止并移除服务器 + 嵌入服务以及 Hermes 插件，并重置 Hermes 记忆配置。除非勾选"删除记忆数据"，否则你的记忆数据（`~/.openviking`）会被保留。
+- **ComfyUI** —— 移除 venv 及其包（勾选"删除 checkout"可一并移除包含自定义节点、输出和配置的 checkout）。
+- **LM Studio + Beledarian Suite** —— 移除应用和 Beledarian Suite 克隆。你的模型（`~/.lmstudio/models`）和设置会被保留。
+
+### 卸载管理器本身
+
+要从系统中移除管理器（逆转 `setup.sh`），在仓库目录中运行：
+
+```bash
+./uninstall_manager.sh            # 停止 + 禁用服务，移除 units
+./uninstall_manager.sh --remove-venv   # 同时删除 Python venv
+```
+
+这**不会**删除仓库本身（你的克隆、`config/` 和 `services.json`）—— 完全清除需手动删除文件夹。已安装的 AI 工具（vLLM venv、Hermes、ComfyUI、LM Studio）和你的模型绝不会被触碰。
 
 ---
 
@@ -158,7 +181,8 @@ systemctl --user restart vllm-manager-frontend
 | `GET /api/system` | CPU / 内存 / 磁盘使用 |
 | `GET /api/models` | 已安装模型扫描（HF 缓存、GGUF 目录、loader API） |
 | `GET /api/models/browse?dir=/path` | 列出目录（手动选模型） |
-| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui}` · `POST /api/installer/uninstall` | 安装器 |
+| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking}` · `POST /api/installer/uninstall`（kind: vllm, hermes, comfyui, lmstudio, openviking） | 安装器 |
+| `GET /api/comfyui/status` · `POST /api/comfyui/start`（body: `{"gpu": <index>}`）· `POST /api/comfyui/stop` · `GET /api/comfyui/logs` | ComfyUI 启动/停止 + 日志 |
 | `GET /api/hermes/webapp-link?profile=<name>` | Hermes Web UI 的一次性链接 |
 
 ### 项目结构

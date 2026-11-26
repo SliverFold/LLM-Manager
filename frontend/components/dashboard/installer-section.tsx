@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import { getApiUrl } from '@/lib/api-config';
 import { useLang } from '@/lib/i18n';
-import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon } from 'lucide-react';
+import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon, Sparkles, Brain } from 'lucide-react';
 
 interface InstallerStatus {
   system: {
@@ -28,6 +28,21 @@ interface InstallerStatus {
     detail: string;
   };
   comfyui: { installed: boolean; dir: string; detail: string };
+  lmstudio: {
+    installed: boolean;
+    lms: string | null;
+    detail: string;
+    suite: { installed: boolean; dir: string; revision: number | null; detail: string };
+  };
+  openviking: {
+    installed: boolean;
+    server: boolean;
+    server_version: string | null;
+    embed: boolean;
+    plugin: boolean;
+    hermes_configured: boolean;
+    detail: string;
+  };
   jobs: { kind: string; status: string; log_file: string; started_at: string }[];
 }
 
@@ -37,10 +52,13 @@ export function InstallerSection() {
   const [venv, setVenv] = useState('~/vllm-venv');
   const [channel, setChannel] = useState<'nightly' | 'stable'>('nightly');
   const [paiton, setPaiton] = useState(false);
+  const [qwenTools, setQwenTools] = useState(false);
   const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
-  const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui'>(null);
-  const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes'>(null);
+  const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
+  const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [removeVenv, setRemoveVenv] = useState(false);
+  const [removeCheckout, setRemoveCheckout] = useState(false);
+  const [removeWorkspace, setRemoveWorkspace] = useState(false);
   const [logJob, setLogJob] = useState<string | null>(null);
   const [logJobType, setLogJobType] = useState<'install' | 'uninstall'>('install');
   const [logText, setLogText] = useState('');
@@ -110,8 +128,8 @@ export function InstallerSection() {
   }, [logText]);
 
   const startInstall = useCallback(
-    async (kind: 'vllm' | 'hermes' | 'comfyui') => {
-      const body = kind === 'vllm' ? { venv, channel, paiton } : kind === 'comfyui' ? { dir: comfyDir } : {};
+    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking') => {
+      const body = kind === 'vllm' ? { venv, channel, paiton, qwentools: qwenTools } : kind === 'comfyui' ? { dir: comfyDir } : {};
       setInstalling(kind);
       try {
         const res = await fetch(getApiUrl(`/api/installer/${kind}`), {
@@ -134,19 +152,30 @@ export function InstallerSection() {
         setInstalling(null);
       }
     },
-    [venv, channel, paiton, comfyDir, t]
+    [venv, channel, paiton, qwenTools, comfyDir, t]
   );
 
   const startUninstall = useCallback(
-    async (kind: 'vllm' | 'hermes') => {
+    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking') => {
       if (kind === 'vllm') {
         if (!window.confirm(t('inst.uninstallConfirm', { venv: venv }))) return;
-      } else {
+      } else if (kind === 'hermes') {
         if (!window.confirm(t('inst.disableWebappConfirm'))) return;
+      } else if (kind === 'comfyui') {
+        if (!window.confirm(t('inst.comfyuiUninstallConfirm', { dir: comfyDir }))) return;
+      } else if (kind === 'openviking') {
+        if (!window.confirm(t('inst.ovUninstallConfirm'))) return;
+      } else {
+        if (!window.confirm(t('inst.lmsUninstallConfirm'))) return;
       }
       setUninstalling(kind);
       try {
-        const body = kind === 'vllm' ? { venv, remove_venv: removeVenv } : {};
+        const body = {
+          kind,
+          ...(kind === 'vllm' ? { venv, remove_venv: removeVenv } : {}),
+          ...(kind === 'comfyui' ? { dir: comfyDir, remove_checkout: removeCheckout } : {}),
+          ...(kind === 'openviking' ? { remove_workspace: removeWorkspace } : {}),
+        };
         const res = await fetch(getApiUrl('/api/installer/uninstall'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -167,7 +196,7 @@ export function InstallerSection() {
         setUninstalling(null);
       }
     },
-    [venv, removeVenv, t]
+    [venv, removeVenv, comfyDir, removeCheckout, removeWorkspace, t]
   );
 
   const restartGateway = async () => {
@@ -217,6 +246,22 @@ export function InstallerSection() {
   const vllm = status?.vllm;
   const hermes = status?.hermes;
   const comfyui = status?.comfyui;
+  const lms = status?.lmstudio;
+  const ov = status?.openviking;
+
+  // Small "Website" link for the installer cards — opens the project's site
+  // in a new tab so users can see what a tool is before installing it.
+  const siteLink = (href: string) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+    >
+      <ExternalLink className="h-3 w-3" />
+      {t('inst.website')}
+    </a>
+  );
 
   return (
     <section>
@@ -226,12 +271,16 @@ export function InstallerSection() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* vLLM card */}
+        {/* left column: vLLM + LM Studio stacked */}
+        <div className="flex flex-col gap-6">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-primary" />
-              vLLM
+            <CardTitle className="flex items-center gap-2 justify-between">
+              <span className="flex items-center gap-2">
+                <Cpu className="h-4 w-4 text-primary" />
+                vLLM
+              </span>
+              {siteLink('https://github.com/vllm-project/vllm')}
             </CardTitle>
             <CardDescription>{t('inst.vllmDesc')}</CardDescription>
           </CardHeader>
@@ -305,6 +354,18 @@ export function InstallerSection() {
                   </span>
                 </label>
               )}
+              <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={qwenTools}
+                  onChange={(e) => setQwenTools(e.target.checked)}
+                  className="h-3 w-3 rounded border-input mt-0.5"
+                />
+                <span>
+                  {t('inst.qwenTools')}
+                  <span className="block text-muted-foreground/70">{t('inst.qwenToolsHint')}</span>
+                </span>
+              </label>
             </div>
 
             <div className="space-y-2">
@@ -338,14 +399,68 @@ export function InstallerSection() {
           </CardContent>
         </Card>
 
+        {/* LM Studio + Beledarian Suite card */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 justify-between">
+              <span className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                {t('inst.lmsTitle')}
+              </span>
+              {siteLink('https://lmstudio.ai')}
+            </CardTitle>
+            <CardDescription>{t('inst.lmsDesc')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {lms?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.installed')}
+                </Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )}
+              {lms?.suite?.installed ? (
+                <Badge className="bg-violet-500/15 text-violet-600 dark:text-violet-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.lmsSuite')}{lms.suite.revision ? ` rev ${lms.suite.revision}` : ''}
+                </Badge>
+              ) : (
+                <Badge variant="secondary">{t('inst.lmsSuiteMissing')}</Badge>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => startInstall('lmstudio')} disabled={installing !== null || uninstalling !== null}>
+                <Download className="h-3 w-3 mr-1" />
+                {installing === 'lmstudio' ? t('inst.installing') : t('inst.install')}
+              </Button>
+              {lms?.installed && (
+                <Button variant="destructive" onClick={() => startUninstall('lmstudio')} disabled={uninstalling !== null || installing !== null}>
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  {uninstalling === 'lmstudio' ? t('inst.uninstalling') : t('inst.uninstall')}
+                </Button>
+              )}
+              {lms?.installed && (
+                <span className="text-xs text-muted-foreground font-mono truncate">{lms.lms}</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        </div>
+
         {/* right column: Hermes (compact) + ComfyUI stacked */}
         <div className="flex flex-col gap-6">
           {/* Hermes webapp card (compact) */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2">
-                <Bot className="h-4 w-4 text-primary" />
-                {t('inst.hermesTitle')}
+              <CardTitle className="flex items-center gap-2 justify-between">
+                <span className="flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-primary" />
+                  {t('inst.hermesTitle')}
+                </span>
+                {siteLink('https://hermes-agent.nousresearch.com')}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -395,12 +510,91 @@ export function InstallerSection() {
             </CardContent>
           </Card>
 
+          {/* OpenViking — Hermes long-term memory (compact) */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 justify-between">
+                <span className="flex items-center gap-2">
+                  <Brain className="h-4 w-4 text-primary" />
+                  {t('inst.ovTitle')}
+                </span>
+                {siteLink('https://github.com/volcengine/OpenViking')}
+              </CardTitle>
+              <CardDescription>{t('inst.ovDesc')}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {ov?.installed ? (
+                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    {t('inst.installed')}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+                )}
+                {ov && (
+                  <>
+                    {ov.server && (
+                      <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                        {t('inst.ovServer')} {ov.server_version || ''}
+                      </Badge>
+                    )}
+                    {ov.embed && <Badge variant="secondary">{t('inst.ovEmbed')}</Badge>}
+                    {ov.plugin ? (
+                      <Badge variant="secondary">{t('inst.ovPlugin')}</Badge>
+                    ) : (
+                      <Badge variant="outline">{t('inst.ovPluginMissing')}</Badge>
+                    )}
+                    {ov.hermes_configured ? (
+                      <Badge className="bg-violet-500/15 text-violet-600 dark:text-violet-400">{t('inst.ovHermes')}</Badge>
+                    ) : (
+                      <Badge variant="outline">{t('inst.ovHermesMissing')}</Badge>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button onClick={() => startInstall('openviking')} disabled={installing !== null || uninstalling !== null}>
+                  <Download className="h-3 w-3 mr-1" />
+                  {installing === 'openviking' ? t('inst.installing') : t('inst.install')}
+                </Button>
+                {ov?.installed && (
+                  <Button variant="destructive" onClick={() => startUninstall('openviking')} disabled={uninstalling !== null || installing !== null}>
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    {uninstalling === 'openviking' ? t('inst.uninstalling') : t('inst.uninstall')}
+                  </Button>
+                )}
+                {ov?.installed && (
+                  <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
+                    <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
+                    {t('inst.restartGateway')}
+                  </Button>
+                )}
+              </div>
+              {ov?.installed && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={removeWorkspace}
+                    onChange={(e) => setRemoveWorkspace(e.target.checked)}
+                    className="h-3 w-3 rounded border-input"
+                  />
+                  {t('inst.ovRemoveWorkspace')}
+                </label>
+              )}
+            </CardContent>
+          </Card>
+
           {/* ComfyUI card */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-primary" />
-                {t('inst.comfyuiTitle')}
+              <CardTitle className="flex items-center gap-2 justify-between">
+                <span className="flex items-center gap-2">
+                  <ImageIcon className="h-4 w-4 text-primary" />
+                  {t('inst.comfyuiTitle')}
+                </span>
+                {siteLink('https://github.com/comfyanonymous/ComfyUI')}
               </CardTitle>
               <CardDescription>{t('inst.comfyuiDesc')}</CardDescription>
             </CardHeader>
@@ -432,9 +626,26 @@ export function InstallerSection() {
                   {installing === 'comfyui' ? t('inst.installing') : t('inst.install')}
                 </Button>
                 {comfyui?.installed && (
+                  <Button variant="destructive" onClick={() => startUninstall('comfyui')} disabled={uninstalling !== null || installing !== null}>
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    {uninstalling === 'comfyui' ? t('inst.uninstalling') : t('inst.uninstall')}
+                  </Button>
+                )}
+                {comfyui?.installed && (
                   <span className="text-xs text-muted-foreground font-mono truncate">{comfyui.dir}</span>
                 )}
               </div>
+              {comfyui?.installed && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={removeCheckout}
+                    onChange={(e) => setRemoveCheckout(e.target.checked)}
+                    className="h-3 w-3 rounded border-input"
+                  />
+                  {t('inst.comfyuiRemoveCheckout')}
+                </label>
+              )}
             </CardContent>
           </Card>
         </div>

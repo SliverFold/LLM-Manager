@@ -18,9 +18,29 @@ import { getApiUrl } from '@/lib/api-config';
 import { useLang } from '@/lib/i18n';
 
 export default function DashboardPage() {
-  const { data: services, isLoading: servicesLoading, error: servicesError } = useServices();
-  const { data: gpus, isLoading: gpusLoading, error: gpusError } = useGPU();
-  const { data: systemInfo, isLoading: systemLoading, error: systemError } = useSystemInfo();
+  // Dashboard refresh rate (seconds) — set by the 1/2/3 buttons in the
+  // sidebar footer, next to the "Last updated" timer. Persisted so the
+  // choice survives reloads. 2s is the default (see use-dashboard-data.ts).
+  const [pollSeconds, setPollSeconds] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('dashboard.pollSeconds') || '', 10);
+      return v === 1 || v === 3 ? v : 2;
+    } catch {
+      return 2;
+    }
+  });
+  const handlePollSecondsChange = (n: number) => {
+    setPollSeconds(n);
+    try {
+      localStorage.setItem('dashboard.pollSeconds', String(n));
+    } catch {
+      // ignore
+    }
+  };
+
+  const { data: services, isLoading: servicesLoading, error: servicesError } = useServices(pollSeconds * 1000);
+  const { data: gpus, isLoading: gpusLoading, error: gpusError } = useGPU(pollSeconds * 1000);
+  const { data: systemInfo, isLoading: systemLoading, error: systemError } = useSystemInfo(pollSeconds * 1000);
   const { t } = useLang();
 
   const [logsState, setLogsState] = useState<{
@@ -117,7 +137,15 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background flex">
-      <SystemSidebar systemInfo={systemInfo} loading={systemLoading} gpus={gpus} gpusLoading={gpusLoading} services={services} />
+      <SystemSidebar
+        systemInfo={systemInfo}
+        loading={systemLoading}
+        gpus={gpus}
+        gpusLoading={gpusLoading}
+        services={services}
+        pollSeconds={pollSeconds}
+        onPollSecondsChange={handlePollSecondsChange}
+      />
 
       <main className="flex-1 ml-72 p-6 overflow-y-auto">
         <div className="max-w-7xl mx-auto space-y-6">

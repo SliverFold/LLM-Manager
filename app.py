@@ -804,6 +804,12 @@ def _vllm_metrics_payload(service_key):
 
     gen = data.get('vllm:generation_tokens_total', 0)
     prompt = data.get('vllm:prompt_tokens_total', 0)
+    # Prefix-cache hits: these prompt tokens were NOT prefilled (loaded from
+    # the KV cache), so they must be excluded from every prefill-speed
+    # calculation. Counting them inflates the rate by the cache-hit ratio —
+    # with 96% hits, a real ~2K tok/s showed up as ~52K tok/s.
+    cached = data.get('vllm:prompt_tokens_cached_total', 0)
+    fresh_prompt = prompt - cached
 
     # Live rates from consecutive polls + rolling windows for hi/lo
     now = time.time()
@@ -813,7 +819,7 @@ def _vllm_metrics_payload(service_key):
     if prev and now > prev['ts']:
         dt = now - prev['ts']
         live_rate = (gen - prev['gen']) / dt
-        live_prefill = (prompt - prev['prompt']) / dt
+        live_prefill = (fresh_prompt - prev.get('fresh_prompt', 0)) / dt
     state = VLLM_STATE.setdefault(service_key, {
         'gen_samples': deque(maxlen=150),
         'prefill_samples': deque(maxlen=150),
@@ -826,7 +832,7 @@ def _vllm_metrics_payload(service_key):
     live_min = min(state['gen_samples']) if state['gen_samples'] else None
     prefill_max = max(state['prefill_samples']) if state['prefill_samples'] else None
     prefill_min = min(state['prefill_samples']) if state['prefill_samples'] else None
-    VLLM_STATE[service_key]['prev'] = {'ts': now, 'gen': gen, 'prompt': prompt}
+    VLLM_STATE[service_key]['prev'] = {'ts': now, 'gen': gen, 'prompt': prompt, 'fresh_prompt': fresh_prompt}
 
     e2e = data.get('vllm:e2e_request_latency_seconds', {})
     ttft = data.get('vllm:time_to_first_token_seconds', {})
@@ -846,8 +852,8 @@ def _vllm_metrics_payload(service_key):
 
     # TTFT (prefill speed): avg + histogram min/max
     ttft_avg = ttft.get('sum', 0) / ttft['count'] if ttft.get('count') else None
-    # Avg prefill speed = total prompt tokens / total prefill time
-    prefill_avg = prompt / ttft_sum if ttft_sum else None
+    # Avg prefill speed = total FRESH (non-cached) prompt tokens / total prefill time
+    prefill_avg = fresh_prompt / ttft_sum if ttft_sum else None
     ttft_min, ttft_max = None, None
     b = sorted(buckets.get('vllm:time_to_first_token_seconds', []))
     total = ttft.get('count', 0)
@@ -862,8 +868,7 @@ def _vllm_metrics_payload(service_key):
                 ttft_max = le  # upper bound of last non-empty finite bucket
             prev_le = le
 
-    # Prefix-cache hit rate
-    cached = data.get('vllm:prompt_tokens_cached_total', 0)
+    # Prefix-cache hit rate (cached is fetched above, before the prefill math)
     cache_pct = cached / prompt * 100 if prompt else None
 
     return {
@@ -1014,7 +1019,10 @@ def get_service_chat(service_key):
 def get_system_info():
     """Get system info"""
     try:
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # Non-blocking CPU sample (delta since the previous call). interval=1
+        # would block every /api/system poll for a full second, which made the
+        # dashboard's 1/2/3s refresh buttons feel like a fixed ~3s.
+        cpu_percent = psutil.cpu_percent(interval=None)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
 
@@ -1460,6 +1468,86 @@ def stop_comfyui():
             pass
     return jsonify({'ok': True, 'killed': pids})
 
+
+@app.route('/api/comfyui/start', methods=['POST'])
+def start_comfyui():
+    """Start the headless ComfyUI server on the chosen GPU.
+
+    Body: {gpu: <int index>, dir?: <checkout path, default ~/ComfyUI-plain>}.
+    Mirrors the ~/Desktop/AI/comfyui-9700.sh / -9070.sh launchers (same flags,
+    same log file) but takes the GPU index from the request instead of
+    hardcoding it. Works on AMD (HIP_VISIBLE_DEVICES) and NVIDIA
+    (CUDA_VISIBLE_DEVICES) — both are set.
+    """
+    body = request.get_json(silent=True) or {}
+    gpu = body.get('gpu')
+    if isinstance(gpu, bool) or not isinstance(gpu, int) or gpu < 0:
+        return jsonify({'success': False, 'message': 'gpu must be a non-negative integer index'}), 400
+
+    pids = _find_comfyui_pids()
+    if pids:
+        return jsonify({'success': False, 'message': f'ComfyUI is already running (pid {pids[0]}) — stop it first'}), 400
+
+    # Default port 8188 must be free (or already a ComfyUI we missed).
+    try:
+        for conn in psutil.net_connections(kind='tcp'):
+            if conn.laddr and conn.laddr.port == 8188 and conn.status == 'LISTEN' and conn.pid:
+                try:
+                    cmd = ' '.join(psutil.Process(conn.pid).cmdline() or [])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    cmd = ''
+                if not _comfyui_cmdline_match(cmd):
+                    return jsonify({'success': False, 'message': 'Port 8188 is in use by another process'}), 400
+    except Exception:
+        pass
+
+    comfy_dir = Path(os.path.expanduser(body.get('dir') or '~/ComfyUI-plain'))
+    if not (comfy_dir / 'main.py').exists():
+        return jsonify({'success': False, 'message': f'No ComfyUI checkout at {comfy_dir} — install it first'}), 400
+    venv_python = comfy_dir / '.venv' / 'bin' / 'python'
+    if not venv_python.exists():
+        return jsonify({'success': False, 'message': f'No venv at {comfy_dir} — install ComfyUI first'}), 400
+
+    cmd = [
+        str(venv_python), '-s', '-u', str(comfy_dir / 'main.py'),
+        '--disable-assets', '--reserve-vram', '3',
+    ]
+    # Comfy Desktop instance model paths (same as the launch scripts)
+    desktop_paths = Path.home() / '.local' / 'share' / 'comfyui-desktop-2' / 'instance-model-paths'
+    if desktop_paths.is_dir():
+        yamls = sorted(desktop_paths.glob('*.yaml'))
+        if yamls:
+            cmd += ['--extra-model-paths-config', str(yamls[-1])]
+    # Shared input/output dirs (same as the launch scripts)
+    shared = Path.home() / 'ComfyUI-Shared'
+    if shared.is_dir():
+        cmd += ['--input-directory', str(shared / 'input'), '--output-directory', str(shared / 'output')]
+
+    env = dict(os.environ)
+    env['HIP_VISIBLE_DEVICES'] = str(gpu)      # AMD ROCm
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu)     # NVIDIA
+    env['GPU_RESOURCE_CACHE_SIZE'] = '0'       # ROCm DynamicVRAM state fix
+    # Never leak the manager's Python env into ComfyUI — it is a different
+    # venv, and PYTHONPATH/VIRTUAL_ENV from here would break its imports.
+    for var in ('PYTHONPATH', 'VIRTUAL_ENV', 'PYTHONUNBUFFERED'):
+        env.pop(var, None)
+
+    log_dir = Path.home() / 'logs'
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / 'comfyui.log'
+    try:
+        with open(log_file, 'ab') as lf:
+            proc = subprocess.Popen(
+                cmd, stdout=lf, stderr=subprocess.STDOUT,
+                env=env, cwd=str(comfy_dir),
+                start_new_session=True,  # detached — survives backend restarts
+            )
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to launch ComfyUI: {e}'}), 500
+
+    return jsonify({'success': True, 'pid': proc.pid, 'gpu': gpu, 'dir': str(comfy_dir),
+                    'message': f'ComfyUI starting on GPU {gpu} (pid {proc.pid}) — the UI polls the server, give it ~10s'})
+
 @app.route('/api/comfyui/logs')
 def get_comfyui_logs():
     """Tail the headless ComfyUI log (launch scripts tee output to this file)."""
@@ -1475,7 +1563,7 @@ def get_comfyui_logs():
             )
             return jsonify({'success': True, 'logs': result.stdout})
         else:
-            return jsonify({'success': False, 'message': 'No log file yet — launch ComfyUI via ~/Desktop/AI/comfyui-9070.sh (or -9700.sh); output is captured there'})
+            return jsonify({'success': False, 'message': 'No log file yet — launch ComfyUI via the Start button on the ComfyUI card (or ~/Desktop/AI/comfyui-9070.sh / -9700.sh); output is captured there'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
@@ -1494,6 +1582,8 @@ def get_installer_status():
         'vllm': installer.detect_vllm(venv),
         'hermes': installer.detect_hermes(),
         'comfyui': installer.detect_comfyui(comfy_dir),
+        'lmstudio': installer.detect_lmstudio(),
+        'openviking': installer.detect_openviking(),
         'jobs': jobs,
     })
 
@@ -1523,17 +1613,34 @@ def install_comfyui():
         return jsonify({'success': False, 'message': err}), 400
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
 
+@app.route('/api/installer/lmstudio', methods=['POST'])
+def install_lmstudio():
+    """Start an LM Studio + Beledarian Suite install job (any Linux distro)."""
+    job_id, err = installer.start_job('lmstudio', {})
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/openviking', methods=['POST'])
+def install_openviking():
+    """Start an OpenViking install job (Hermes long-term memory: server + embeddings + plugin)."""
+    job_id, err = installer.start_job('openviking', {})
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
 @app.route('/api/installer/uninstall', methods=['POST'])
 def uninstall():
-    """Start an uninstall job. Body: {kind: 'vllm'|'hermes', venv?, remove_venv?}.
+    """Start an uninstall job. Body: {kind: 'vllm'|'hermes'|'comfyui'|'lmstudio'|'openviking', venv?, remove_venv?, dir?, remove_checkout?, remove_workspace?}.
 
-    vLLM: pip-uninstalls vLLM from the venv (optionally removes the venv).
+    vLLM: pip-uninstalls vLLM from the given venv (optionally removes the venv).
     Hermes: disables the webapp (safe reverse — does not remove the running agent).
+    OpenViking: stops/removes services + Hermes plugin/config (memory data kept unless remove_workspace).
     """
     body = request.get_json(silent=True) or {}
     kind = body.get('kind')
-    if kind not in ('vllm', 'hermes'):
-        return jsonify({'success': False, 'message': 'kind must be vllm or hermes'}), 400
+    if kind not in ('vllm', 'hermes', 'comfyui', 'lmstudio', 'openviking'):
+        return jsonify({'success': False, 'message': 'kind must be vllm, hermes, comfyui, lmstudio, or openviking'}), 400
     job_id, err = installer.start_uninstall_job(kind, body)
     if err:
         return jsonify({'success': False, 'message': err}), 400

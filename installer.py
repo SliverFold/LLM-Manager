@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -164,6 +165,125 @@ def detect_comfyui(venv=None):
     return out
 
 
+def detect_lmstudio():
+    """LM Studio: installed? (lms CLI / AppImage / /opt, any distro) + Beledarian Suite present?"""
+    home = Path.home()
+    suite_dir = home / 'beledarians-lm-studio-tools'
+    out = {
+        'installed': False,
+        'lms': None,
+        'detail': '',
+        'suite': {
+            'installed': False,
+            'dir': str(suite_dir),
+            'revision': None,
+            'detail': '',
+        },
+    }
+    # lms CLI: PATH, then the official curl|bash location, then common AppImage / .deb spots
+    lms = shutil.which('lms')
+    if not lms and (home / '.lmstudio' / 'bin' / 'lms').exists():
+        lms = str(home / '.lmstudio' / 'bin' / 'lms')
+    if not lms:
+        for cand in (
+            home / 'Applications' / 'LM-Studio.AppImage',
+            home / 'Downloads' / 'LM-Studio.AppImage',
+            home / 'LM-Studio.AppImage',
+        ):
+            if cand.exists():
+                lms = str(cand)
+                break
+    if not lms and Path('/opt/LM Studio').is_dir():
+        lms = '/opt/LM Studio'
+    if lms:
+        out['installed'] = True
+        out['lms'] = lms
+        out['detail'] = 'lms CLI' if lms.endswith('/lms') or lms == 'lms' else 'AppImage / app dir'
+    else:
+        out['detail'] = 'no LM Studio found (lms CLI, AppImage, /opt/LM Studio)'
+    if suite_dir.exists() and (suite_dir / 'manifest.json').exists():
+        out['suite']['installed'] = True
+        try:
+            m = re.search(r'"revision"\s*:\s*(\d+)', (suite_dir / 'manifest.json').read_text())
+            out['suite']['revision'] = int(m.group(1)) if m else None
+        except Exception:
+            pass
+    else:
+        out['suite']['detail'] = f'no Beledarian Suite at {suite_dir}'
+    return out
+
+
+def _hermes_memory_provider():
+    """Value of `memory: provider:` in ~/.hermes/config.yaml (line-based, no YAML dep)."""
+    cfg = Path.home() / '.hermes' / 'config.yaml'
+    if not cfg.exists():
+        return None
+    try:
+        lines = cfg.read_text().splitlines()
+    except Exception:
+        return None
+    i, n = 0, len(lines)
+    while i < n:
+        if re.match(r'^memory:\s*$', lines[i]):
+            j = i + 1
+            while j < n:
+                if re.match(r'^\S', lines[j]) and not lines[j].lstrip().startswith('#'):
+                    break  # real top-level key — end of the memory block
+                m = re.match(r'^  provider:\s*(\S+)', lines[j])
+                if m:
+                    return m.group(1).strip('"\'')
+                j += 1
+            return None
+        i += 1
+    return None
+
+
+def detect_openviking():
+    """OpenViking (Hermes long-term memory): server, embeddings, plugin, Hermes config."""
+    out = {
+        'installed': False,
+        'server': False,
+        'server_version': None,
+        'embed': False,
+        'plugin': False,
+        'hermes_configured': False,
+        'detail': '',
+    }
+    # OpenViking server health (:1934)
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:1934/health', timeout=3) as r:
+            if r.status == 200:
+                data = json.loads(r.read())
+                out['server'] = bool(data.get('healthy'))
+                out['server_version'] = data.get('version')
+    except Exception:
+        pass
+    # Embedding service health (:8091)
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=3) as r:
+            if r.status == 200:
+                data = json.loads(r.read())
+                out['embed'] = bool(data.get('ready'))
+    except Exception:
+        pass
+    # Hermes plugin
+    out['plugin'] = (Path.home() / '.hermes' / 'plugins' / 'openviking' / '__init__.py').exists()
+    # Hermes memory provider
+    provider = _hermes_memory_provider()
+    out['hermes_configured'] = (provider == 'openviking')
+    out['installed'] = out['server'] and out['plugin'] and out['hermes_configured']
+    if not out['installed']:
+        missing = []
+        if not out['server']:
+            missing.append('server')
+        if not out['plugin']:
+            missing.append('Hermes plugin')
+        if not out['hermes_configured']:
+            missing.append('Hermes memory config')
+        out['detail'] = 'missing: ' + ', '.join(missing) if missing else ''
+    return out
+
+
 def _job_worker(job_id, log_file, cmd):
     """Run the install command, streaming its output to the job log file."""
     try:
@@ -191,7 +311,7 @@ def _job_worker(job_id, log_file, cmd):
 
 
 def start_job(kind, params):
-    """Start an install job. kind: 'vllm' | 'hermes'. Returns (job_id, error)."""
+    """Start an install job. kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'. Returns (job_id, error)."""
     with JOBS_LOCK:
         active = _ACTIVE.get(kind)
         if active and JOBS.get(active, {}).get('status') == 'running':
@@ -210,12 +330,17 @@ def start_job(kind, params):
         venv = os.path.expanduser(params.get('venv') or '~/vllm-venv')
         channel = params.get('channel') or 'nightly'
         paiton = 'true' if params.get('paiton') else 'false'
-        cmd = ['bash', str(SCRIPTS_DIR / 'install_vllm.sh'), venv, channel, paiton]
+        qwentools = 'true' if params.get('qwentools') else 'false'
+        cmd = ['bash', str(SCRIPTS_DIR / 'install_vllm.sh'), venv, channel, paiton, qwentools]
     elif kind == 'hermes':
         cmd = ['bash', str(SCRIPTS_DIR / 'install_hermes.sh')]
     elif kind == 'comfyui':
         dir = os.path.expanduser(params.get('dir') or '~/ComfyUI-plain')
         cmd = ['bash', str(SCRIPTS_DIR / 'install_comfyui.sh'), dir]
+    elif kind == 'lmstudio':
+        cmd = ['bash', str(SCRIPTS_DIR / 'install_lmstudio.sh')]
+    elif kind == 'openviking':
+        cmd = ['bash', str(SCRIPTS_DIR / 'install_openviking.sh')]
     else:
         return None, f'unknown kind: {kind}'
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
@@ -224,10 +349,14 @@ def start_job(kind, params):
 
 
 def start_uninstall_job(kind, params):
-    """Start an uninstall job. kind: 'vllm' | 'hermes'. Returns (job_id, error).
+    """Start an uninstall job. kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'. Returns (job_id, error).
 
     vLLM: pip-uninstalls vLLM from the given venv (optionally removes the venv).
     Hermes: disables the webapp (the safe reverse — does NOT remove the running agent).
+    ComfyUI: removes the venv (optionally the whole checkout).
+    LM Studio: removes the app + Beledarian Suite clone (never models/settings).
+    OpenViking: stops/removes the services + Hermes plugin/config (memory data kept
+    unless remove_workspace=true).
     """
     with JOBS_LOCK:
         active = _ACTIVE.get(kind)
@@ -249,6 +378,15 @@ def start_uninstall_job(kind, params):
         cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_vllm.sh'), venv, remove_venv]
     elif kind == 'hermes':
         cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_hermes.sh')]
+    elif kind == 'comfyui':
+        dir = os.path.expanduser(params.get('dir') or '~/ComfyUI-plain')
+        remove_checkout = 'true' if params.get('remove_checkout') else 'false'
+        cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_comfyui.sh'), dir, remove_checkout]
+    elif kind == 'lmstudio':
+        cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_lmstudio.sh')]
+    elif kind == 'openviking':
+        remove_workspace = 'true' if params.get('remove_workspace') else 'false'
+        cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_openviking.sh'), remove_workspace]
     else:
         return None, f'unknown kind: {kind}'
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
