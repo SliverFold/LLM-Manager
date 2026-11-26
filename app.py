@@ -338,7 +338,7 @@ def get_service_config(service_key):
         'port': service.get('port', 8000),
         'tensor_parallel_size': 1,
         'gpu_memory_utilization': 0.9,
-        'max_model_len': 4096,
+        'max_model_len': 102400,
         'dtype': 'auto'
     })
 
@@ -364,7 +364,7 @@ def save_service_config(service_key):
             'port': params.get('port', 8000),
             'tensor_parallel_size': params.get('tensorParallelSize', params.get('tensor_parallel_size', 1)),
             'gpu_memory_utilization': params.get('gpuUtil', params.get('gpu_memory_utilization', 0.9)),
-            'max_model_len': params.get('maxModelLen', params.get('max_model_len', 4096)),
+            'max_model_len': params.get('maxModelLen', params.get('max_model_len', 102400)),
             'dtype': params.get('dtype', 'auto')
         }
         save_services_config()
@@ -407,7 +407,7 @@ def start_service(service_key):
     if not (0.1 <= gpu_memory_utilization <= 1.0):
         return jsonify({'success': False, 'message': 'gpu_memory_utilization out of range (0.1-1.0)'}), 400
 
-    max_model_len = int(data.get('maxModelLen', data.get('max_model_len', default_params.get('max_model_len', 4096))))
+    max_model_len = int(data.get('maxModelLen', data.get('max_model_len', default_params.get('max_model_len', 102400))))
     if not (256 <= max_model_len <= 262144):
         return jsonify({'success': False, 'message': 'max_model_len out of range (256-262144)'}), 400
 
