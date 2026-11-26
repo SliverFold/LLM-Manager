@@ -51,6 +51,10 @@ plus a live **Running / Stopped** badge. Use **Unload all** to stop everything
 at once. The left sidebar shows a live system monitor: per-GPU VRAM,
 utilization, temperature, and power, plus CPU, memory, and disk.
 
+The sidebar's **LLM Manager** button (below the language toggle) checks
+GitHub for updates to the manager itself: it lists the new commits and lets
+you install them (fast-forward pull + rebuild + restart) or decline.
+
 ### Chat with your models
 
 The **Model chats** list in the sidebar opens a simple browser chat for each
