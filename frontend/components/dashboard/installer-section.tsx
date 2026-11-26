@@ -832,6 +832,8 @@ export function InstallerSection() {
               )}
             </div>
 
+            <p className="text-xs text-muted-foreground">{t('inst.hermesDesc')}</p>
+
             <div className="flex items-center gap-2 flex-wrap">
               <Button onClick={() => startInstall('hermes')} disabled={installing !== null || updating !== null}>
                 <Download className="h-3 w-3 mr-1" />
