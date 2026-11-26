@@ -52,13 +52,15 @@ interface InstallerStatus {
 
 // The Paiton release models available in the paiton-vllm-plugin repo. The slug
 // is passed to the backend's install_paiton.sh; the name is the dropdown label.
+// `size` is the total download estimate (image + weights, which are a separate
+// download — the docker image does NOT bundle the weights).
 const PAITON_MODELS = [
-  { slug: 'qwen38', name: 'Qwen3.8 27B' },
-  { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B' },
-  { slug: 'minicpm5-2b', name: 'MiniCPM5 2B' },
-  { slug: 'ornith-1.5', name: 'Ornith 1.5 35B' },
-  { slug: 'qwen3-coder-30b', name: 'Qwen3-Coder 30B' },
-  { slug: 'qwen38-neo-coder', name: 'Qwen3.8 NEO CODER MAX' },
+  { slug: 'qwen38', name: 'Qwen3.8 27B', size: '~66 GB' },
+  { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B', size: '~44 GB' },
+  { slug: 'minicpm5-2b', name: 'MiniCPM5 2B', size: '~40 GB' },
+  { slug: 'ornith-1.5', name: 'Ornith 1.5 35B', size: '~28 GB' },
+  { slug: 'qwen3-coder-30b', name: 'Qwen3-Coder 30B', size: '~30 GB' },
+  { slug: 'qwen38-neo-coder', name: 'Qwen3.8 NEO CODER MAX', size: '~25 GB' },
 ];
 
 // A collapsible installer card: the header (icon + title + status badge +
@@ -588,7 +590,9 @@ export function InstallerSection() {
                 </Badge>
               )
             )}
-            <span className="text-xs text-muted-foreground">{t('inst.paitonSize')}</span>
+            <span className="text-xs text-muted-foreground">
+              {t('inst.paitonSize', { size: PAITON_MODELS.find((m) => m.slug === paitonModel)?.size || '~66 GB' })}
+            </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <select
