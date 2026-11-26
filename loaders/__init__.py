@@ -13,12 +13,14 @@ from .vllm import VllmLoader
 from .ollama import OllamaLoader
 from .llama_cpp import LlamaCppLoader
 from .lmstudio import LMStudioLoader
+from .paiton import PaitonLoader
 
 _REGISTRY = {
     VllmLoader.key: VllmLoader,
     OllamaLoader.key: OllamaLoader,
     LlamaCppLoader.key: LlamaCppLoader,
     LMStudioLoader.key: LMStudioLoader,
+    PaitonLoader.key: PaitonLoader,
 }
 
 

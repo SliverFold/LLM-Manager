@@ -233,7 +233,49 @@ def check_service_status(service_key):
     service = SERVICES[service_key]
 
     try:
-        # Check if the process is running
+        # Docker-container services (Paiton): check the container's state via docker ps,
+        # then use the container's PID for CPU/memory/GPU stats.
+        container_name = service.get('container_name')
+        if container_name:
+            r = subprocess.run(
+                ['docker', 'ps', '--filter', f'name={container_name}', '--format', '{{.State}}'],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0 and 'running' in r.stdout:
+                r2 = subprocess.run(
+                    ['docker', 'inspect', container_name, '--format', '{{.State.Pid}}'],
+                    capture_output=True, text=True, timeout=10
+                )
+                try:
+                    pid = int(r2.stdout.strip() or 0)
+                except ValueError:
+                    pid = 0
+                if pid:
+                    proc = psutil.Process(pid)
+                    cpu_percent = proc.cpu_percent(interval=0.1)
+                    memory_info = proc.memory_info()
+                    memory_mb = memory_info.rss / 1024 / 1024
+                    port = service.get('port', service.get('default_params', {}).get('port', 8000))
+                    port_check = subprocess.run(
+                        ['curl', '-s', f'http://localhost:{port}/health'],
+                        capture_output=True, timeout=2
+                    )
+                    port_accessible = port_check.returncode == 0
+                    gpu_memory = get_process_gpu_usage(pid)
+                    return {
+                        'status': 'running',
+                        'pid': pid,
+                        'cpu_percent': cpu_percent,
+                        'memory_mb': memory_mb,
+                        'port_accessible': port_accessible,
+                        'gpu_memory_mb': gpu_memory,
+                        'uptime': datetime.fromtimestamp(proc.create_time()).strftime('%Y-%m-%d %H:%M:%S'),
+                        'uptime_seconds': int(time.time() - proc.create_time())
+                    }
+                return {'status': 'running', 'port_accessible': False}
+            return {'status': 'stopped'}
+
+        # Process-based services: check if the process is running
         result = subprocess.run(
             ['pgrep', '-f', service['process_pattern']],
             capture_output=True,
@@ -1099,11 +1141,11 @@ def get_service_metrics(service_key):
     if not status or status.get('status') != 'running':
         return jsonify({'success': False, 'message': 'Service is not running', 'loader': loader_key})
     try:
-        if loader_key == 'vllm':
+        if loader_key in ('vllm', 'paiton'):
             payload, err = _vllm_metrics_payload(service_key)
             if err:
                 return jsonify({'success': False, 'message': err, 'loader': loader_key})
-            return jsonify({'success': True, 'loader': 'vllm', **payload})
+            return jsonify({'success': True, 'loader': loader_key, **payload})
         if loader_key == 'ollama':
             port = service.get('default_params', {}).get('port', 11434)
             return jsonify({'success': True, **_ollama_metrics(port)})
