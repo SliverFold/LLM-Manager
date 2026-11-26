@@ -1820,6 +1820,40 @@ def install_paiton():
         return jsonify({'success': False, 'message': err}), 409
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
 
+
+@app.route('/api/installer/vllm-models')
+def vllm_models():
+    """List the curated vLLM models (safetensors) the user can download."""
+    from model_catalog import VLLM_MODELS
+    return jsonify({'success': True, 'models': VLLM_MODELS})
+
+
+@app.route('/api/installer/vllm-model', methods=['POST'])
+def vllm_model():
+    """Download a vLLM model (safetensors from HF). Body: {model: slug}."""
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_vllm_model_job(body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 409
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+
+@app.route('/api/installer/lmstudio-models')
+def lmstudio_models():
+    """List the curated LM Studio models (GGUF) the user can download."""
+    from model_catalog import LMSTUDIO_MODELS
+    return jsonify({'success': True, 'models': LMSTUDIO_MODELS})
+
+
+@app.route('/api/installer/lmstudio-model', methods=['POST'])
+def lmstudio_model():
+    """Download an LM Studio model (GGUF from HF). Body: {model: slug}."""
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_lmstudio_model_job(body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 409
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
 @app.route('/api/installer/uninstall', methods=['POST'])
 def uninstall():
     """Start an uninstall job. Body: {kind: 'vllm'|'hermes'|'comfyui'|'lmstudio'|'openviking', venv?, remove_venv?, dir?, remove_checkout?, remove_workspace?}.

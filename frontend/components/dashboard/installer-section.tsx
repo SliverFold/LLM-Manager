@@ -120,6 +120,13 @@ export function InstallerSection() {
   const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [paitonInstalling, setPaitonInstalling] = useState(false);
   const [paitonModel, setPaitonModel] = useState('qwen38');
+  // Model downloaders (vLLM + LM Studio)
+  const [vllmModels, setVllmModels] = useState<{ slug: string; name: string; size: string; vram?: number | null }[]>([]);
+  const [lmstudioModels, setLmstudioModels] = useState<{ slug: string; name: string; size: string; vram?: number | null }[]>([]);
+  const [vllmModel, setVllmModel] = useState('');
+  const [lmstudioModel, setLmstudioModel] = useState('');
+  const [vllmModelDownloading, setVllmModelDownloading] = useState(false);
+  const [lmstudioModelDownloading, setLmstudioModelDownloading] = useState(false);
   const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [updating, setUpdating] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [removeVenv, setRemoveVenv] = useState(false);
@@ -160,6 +167,34 @@ export function InstallerSection() {
       clearInterval(id);
     };
   }, [venv, comfyDir]);
+
+  // Fetch the curated model lists for the vLLM + LM Studio downloaders.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const [vres, lres] = await Promise.all([
+          fetch(getApiUrl('/api/installer/vllm-models')),
+          fetch(getApiUrl('/api/installer/lmstudio-models')),
+        ]);
+        const vdata = await vres.json();
+        const ldata = await lres.json();
+        if (!active) return;
+        if (vdata.success) {
+          setVllmModels(vdata.models);
+          if (vdata.models.length) setVllmModel(vdata.models[0].slug);
+        }
+        if (ldata.success) {
+          setLmstudioModels(ldata.models);
+          if (ldata.models.length) setLmstudioModel(ldata.models[0].slug);
+        }
+      } catch {
+        // backend briefly down — ignore
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, []);
 
   // Live log while an install job is running (or just finished).
   useEffect(() => {
@@ -340,6 +375,62 @@ export function InstallerSection() {
       }
     },
     [status, t, paitonModel]
+  );
+
+  const startVllmModel = useCallback(
+    async () => {
+      if (!vllmModel) return;
+      setVllmModelDownloading(true);
+      try {
+        const res = await fetch(getApiUrl('/api/installer/vllm-model'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: vllmModel }),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setVllmModelDownloading(false);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setVllmModelDownloading(false);
+      }
+    },
+    [t, vllmModel]
+  );
+
+  const startLmstudioModel = useCallback(
+    async () => {
+      if (!lmstudioModel) return;
+      setLmstudioModelDownloading(true);
+      try {
+        const res = await fetch(getApiUrl('/api/installer/lmstudio-model'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: lmstudioModel }),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setLmstudioModelDownloading(false);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setLmstudioModelDownloading(false);
+      }
+    },
+    [t, lmstudioModel]
   );
 
   const restartGateway = async () => {
@@ -540,6 +631,26 @@ export function InstallerSection() {
               </label>
             )}
           </div>
+
+          {/* Model downloader (vLLM) */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">{t('inst.vllmModelLabel')}</label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={vllmModel}
+                onChange={(e) => setVllmModel(e.target.value)}
+                className="w-[220px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                {vllmModels.map((m) => (
+                  <option key={m.slug} value={m.slug}>{m.name} ({m.size})</option>
+                ))}
+              </select>
+              <Button onClick={startVllmModel} disabled={vllmModelDownloading || installing !== null || uninstalling !== null || updating !== null}>
+                {vllmModelDownloading ? <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+                {vllmModelDownloading ? t('inst.downloading') : t('inst.download')}
+              </Button>
+            </div>
+          </div>
         </CollapsibleCard>
 
         {/* Paiton — Docker container install (any release model) */}
@@ -666,6 +777,26 @@ export function InstallerSection() {
             {lms?.installed && (
               <span className="text-xs text-muted-foreground font-mono truncate">{lms.lms}</span>
             )}
+          </div>
+
+          {/* Model downloader (LM Studio) */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">{t('inst.lmsModelLabel')}</label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={lmstudioModel}
+                onChange={(e) => setLmstudioModel(e.target.value)}
+                className="w-[220px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                {lmstudioModels.map((m) => (
+                  <option key={m.slug} value={m.slug}>{m.name} ({m.size})</option>
+                ))}
+              </select>
+              <Button onClick={startLmstudioModel} disabled={lmstudioModelDownloading || installing !== null || uninstalling !== null || updating !== null}>
+                {lmstudioModelDownloading ? <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+                {lmstudioModelDownloading ? t('inst.downloading') : t('inst.download')}
+              </Button>
+            </div>
           </div>
         </CollapsibleCard>
         </div>

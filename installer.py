@@ -529,6 +529,48 @@ def start_uninstall_job(kind, params):
     return job_id, None
 
 
+def _start_model_job(kind, params):
+    """Start a model download job for vLLM or LM Studio.
+    params: {model: slug}. Returns (job_id, error)."""
+    from model_catalog import VLLM_MODELS, LMSTUDIO_MODELS
+    model = params.get('model')
+    catalog = VLLM_MODELS if kind == 'vllm' else LMSTUDIO_MODELS
+    entry = next((m for m in catalog if m['slug'] == model), None)
+    if not entry:
+        return None, f'unknown model slug {model!r}'
+    script = 'download_vllm_model.sh' if kind == 'vllm' else 'download_lmstudio_model.sh'
+    with JOBS_LOCK:
+        active = _ACTIVE.get(f'{kind}-model')
+        if active and JOBS.get(active, {}).get('status') == 'running':
+            return None, f'{kind} model download already running (job {active})'
+        ts = int(time.time())
+        job_id = f'{kind}-model-{ts}'
+        log_file = LOG_DIR / f'{kind}_model_{ts}.log'
+        JOBS[job_id] = {
+            'kind': f'{kind}-model',
+            'status': 'running',
+            'log_file': str(log_file),
+            'started_at': datetime.now().isoformat(),
+            'model': entry['name'],
+        }
+        _ACTIVE[f'{kind}-model'] = job_id
+    LOG_DIR.mkdir(exist_ok=True)
+    cmd = ['bash', str(SCRIPTS_DIR / script), entry['repo'], entry.get('file', ''), entry['slug']]
+    t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
+    t.start()
+    return job_id, None
+
+
+def start_vllm_model_job(params):
+    """Start a vLLM model download job (safetensors from HF)."""
+    return _start_model_job('vllm', params)
+
+
+def start_lmstudio_model_job(params):
+    """Start an LM Studio model download job (GGUF from HF)."""
+    return _start_model_job('lmstudio', params)
+
+
 def tail_job_log(job_id, lines=200):
     """Tail a job's log file. Returns (text, job) or (None, None)."""
     with JOBS_LOCK:
