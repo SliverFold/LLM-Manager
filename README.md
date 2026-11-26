@@ -267,3 +267,7 @@ by [Hou Shihao](https://github.com/shihaohou) — thanks for the original work.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Changelog
+
+- 0.5.1 (2026-11-26): ComfyUI start/stop + GPU picker, Open UI button, OpenViking + LM Studio installers, LLM Manager updater.
