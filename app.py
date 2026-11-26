@@ -1809,10 +1809,10 @@ def update_tool():
 
 @app.route('/api/installer/paiton', methods=['POST'])
 def install_paiton():
-    """Install/refresh the Paiton big-brain (Qwen3.8) as a Docker container.
-    Body: {port?} (default 8000). Pulls the pinned Paiton image, downloads the
-    Qwen3.8 model weights (pinned revisions), and recreates the container with
-    the big-brain serve flags. AMD ROCm only.
+    """Install/refresh a Paiton release model as a Docker container.
+    Body: {model?: slug, port?}. Pulls the pinned Paiton image for the chosen
+    model (Qwen3.8 also downloads its pinned weights) and recreates the container.
+    AMD ROCm only.
     """
     body = request.get_json(silent=True) or {}
     job_id, err = installer.start_paiton_job(body)

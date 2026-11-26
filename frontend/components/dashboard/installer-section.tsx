@@ -50,6 +50,17 @@ interface InstallerStatus {
   jobs: { kind: string; status: string; log_file: string; started_at: string }[];
 }
 
+// The Paiton release models available in the paiton-vllm-plugin repo. The slug
+// is passed to the backend's install_paiton.sh; the name is the dropdown label.
+const PAITON_MODELS = [
+  { slug: 'qwen38', name: 'Qwen3.8 27B' },
+  { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B' },
+  { slug: 'minicpm5-2b', name: 'MiniCPM5 2B' },
+  { slug: 'ornith-1.5', name: 'Ornith 1.5 35B' },
+  { slug: 'qwen3-coder-30b', name: 'Qwen3-Coder 30B' },
+  { slug: 'qwen38-neo-coder', name: 'Qwen3.8 NEO CODER MAX' },
+];
+
 // A collapsible installer card: the header (icon + title + status badge +
 // chevron) is always visible and clickable; clicking it toggles the full
 // content. Collapsed cards show only the minimal "installed / not installed"
@@ -106,6 +117,7 @@ export function InstallerSection() {
   const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
   const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [paitonInstalling, setPaitonInstalling] = useState(false);
+  const [paitonModel, setPaitonModel] = useState('qwen38');
   const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [updating, setUpdating] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [removeVenv, setRemoveVenv] = useState(false);
@@ -308,7 +320,7 @@ export function InstallerSection() {
         const res = await fetch(getApiUrl('/api/installer/paiton'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ model: paitonModel }),
         });
         const data: { success: boolean; job?: string; message?: string } = await res.json();
         if (data.success && data.job) {
@@ -325,7 +337,7 @@ export function InstallerSection() {
         setPaitonInstalling(false);
       }
     },
-    [status, t]
+    [status, t, paitonModel]
   );
 
   const restartGateway = async () => {
@@ -528,7 +540,7 @@ export function InstallerSection() {
           </div>
         </CollapsibleCard>
 
-        {/* Paiton big-brain (Qwen3.8) — Docker container install */}
+        {/* Paiton — Docker container install (any release model) */}
         <CollapsibleCard
           icon={<Brain className="h-4 w-4 text-primary" />}
           title={t('inst.paitonTitle')}
@@ -579,6 +591,15 @@ export function InstallerSection() {
             <span className="text-xs text-muted-foreground">{t('inst.paitonSize')}</span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={paitonModel}
+              onChange={(e) => setPaitonModel(e.target.value)}
+              className="w-[220px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {PAITON_MODELS.map((m) => (
+                <option key={m.slug} value={m.slug}>{m.name}</option>
+              ))}
+            </select>
             <Button
               onClick={startPaiton}
               disabled={paitonInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}

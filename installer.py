@@ -165,22 +165,25 @@ def detect_docker():
 
 
 def detect_paiton_docker():
-    """Is the Paiton big-brain Docker container installed/running? (Qwen3.8 on the pinned Paiton image)"""
-    out = {'installed': False, 'running': False, 'image': None, 'version': None, 'detail': ''}
+    """Is any Paiton Docker container installed/running? (checks all paiton-* containers)"""
+    out = {'installed': False, 'running': False, 'image': None, 'version': None, 'detail': '', 'models': []}
     if not shutil.which('docker'):
         out['detail'] = 'docker not found'
         return out
-    # Is the container present (running or stopped)?
-    rc, txt = _run(['docker', 'ps', '-a', '--filter', 'name=paiton-qwen38', '--format', '{{.Image}}\t{{.Status}}\t{{.Ports}}'], timeout=10)
-    line = (txt.strip().splitlines() or [''])[0]
-    if line:
-        image, status, ports = (line.split('\t') + [''])[:3]
+    # List all paiton-* containers (running or stopped).
+    rc, txt = _run(['docker', 'ps', '-a', '--filter', 'name=paiton-', '--format', '{{.Names}}\t{{.Image}}\t{{.Status}}'], timeout=10)
+    lines = [l for l in (txt.strip().splitlines() or []) if l.strip()]
+    if lines:
         out['installed'] = True
-        out['image'] = image.split(':')[0] if ':' in image else image
-        out['running'] = 'Up' in status
-        out['detail'] = status.strip()
+        for line in lines:
+            name, image, status = (line.split('\t') + [''])[:3]
+            out['models'].append({'name': name, 'image': image.split(':')[0] if ':' in image else image, 'running': 'Up' in status, 'status': status.strip()})
+        # Aggregate: running if any is up; detail shows the first model's status.
+        out['running'] = any(m['running'] for m in out['models'])
+        out['image'] = out['models'][0]['image']
+        out['detail'] = f"{len(out['models'])} container(s)" if len(out['models']) > 1 else out['models'][0]['status']
     else:
-        out['detail'] = 'no paiton-qwen38 container'
+        out['detail'] = 'no paiton containers'
     return out
 
 
@@ -454,8 +457,9 @@ def start_update_job(kind, params):
 
 
 def start_paiton_job(params):
-    """Start a Paiton big-brain Docker install job (pull image + download weights + recreate container).
-    Returns (job_id, error)."""
+    """Start a Paiton Docker install job for the chosen model (pull image + download
+    weights + recreate container). params: {model?: slug, port?}. Returns (job_id, error)."""
+    model = params.get('model') or 'qwen38'
     with JOBS_LOCK:
         active = _ACTIVE.get('paiton')
         if active and JOBS.get(active, {}).get('status') == 'running':
@@ -468,11 +472,12 @@ def start_paiton_job(params):
             'status': 'running',
             'log_file': str(log_file),
             'started_at': datetime.now().isoformat(),
+            'model': model,
         }
         _ACTIVE['paiton'] = job_id
     LOG_DIR.mkdir(exist_ok=True)
-    port = str(params.get('port') or 8000)
-    cmd = ['bash', str(SCRIPTS_DIR / 'install_paiton.sh'), port]
+    port = str(params.get('port') or '')
+    cmd = ['bash', str(SCRIPTS_DIR / 'install_paiton.sh'), model, port]
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
     t.start()
     return job_id, None

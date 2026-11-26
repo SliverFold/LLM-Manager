@@ -27,12 +27,14 @@ def _repo():
 #   type 'env':   launcher reads PAITON_* env vars for port/container (serve-docker.sh).
 PAITON_MODELS = {
     'Qwen3.8 27B (big brain)': {
+        'slug': 'qwen38',
         'dir': 'Qwen3.8-MXFP4-DFlash2',
         'launcher': 'run-3bit.sh',
         'type': 'flags',
         'gpus': 1,
     },
     'GPT-OSS 20B': {
+        'slug': 'gpt-oss-20b',
         'dir': 'GPT-OSS-20B',
         'launcher': 'serve-docker.sh',
         'type': 'env',
@@ -41,6 +43,7 @@ PAITON_MODELS = {
         'gpus': 1,
     },
     'MiniCPM5 2B': {
+        'slug': 'minicpm5-2b',
         'dir': 'MiniCPM5-2B',
         'launcher': 'serve-docker.sh',
         'type': 'env',
@@ -49,6 +52,7 @@ PAITON_MODELS = {
         'gpus': 1,
     },
     'Ornith 1.5 35B': {
+        'slug': 'ornith-1.5',
         'dir': 'Ornith-1.5',
         'launcher': 'serve-docker.sh',
         'type': 'env',
@@ -57,6 +61,7 @@ PAITON_MODELS = {
         'gpus': 1,
     },
     'Qwen3-Coder 30B': {
+        'slug': 'qwen3-coder-30b',
         'dir': 'Qwen3-Coder-30B',
         'launcher': 'serve-docker.sh',
         'type': 'env',
@@ -65,6 +70,7 @@ PAITON_MODELS = {
         'gpus': 1,
     },
     'Qwen3.8 NEO CODER MAX': {
+        'slug': 'qwen38-neo-coder',
         'dir': 'Qwen3.8-NEO-CODER-MAX',
         'launcher': 'serve-docker.sh',
         'type': 'env',
@@ -104,6 +110,7 @@ class PaitonLoader(Loader):
         for name, cfg in PAITON_MODELS.items():
             models.append({
                 'name': name,
+                'slug': cfg['slug'],
                 'path': os.path.join(repo, 'models', cfg['dir']),
                 'size_gb': 0.0,
                 'format': 'paiton',
