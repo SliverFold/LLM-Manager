@@ -20,6 +20,8 @@ interface InstallerStatus {
     disk_free_gb: number;
   };
   vllm: { installed: boolean; venv: string; version: string | null; rocm_version: string | null; detail: string };
+  paiton: { installed: boolean; version: string | null; detail: string };
+  qwen: { installed: boolean; agent: boolean; code: boolean; detail: string };
   hermes: {
     installed: boolean;
     version: string | null;
@@ -265,7 +267,9 @@ export function InstallerSection() {
       }
       setUpdating(kind);
       try {
-        const body = kind === 'vllm' ? { kind, venv, channel } : kind === 'comfyui' ? { kind, dir: comfyDir } : { kind };
+        const body = kind === 'vllm'
+          ? { kind, venv, channel, paiton: !!status?.paiton?.installed, qwentools: !!status?.qwen?.installed }
+          : kind === 'comfyui' ? { kind, dir: comfyDir } : { kind };
         const res = await fetch(getApiUrl('/api/installer/update'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -286,7 +290,7 @@ export function InstallerSection() {
         setUpdating(null);
       }
     },
-    [venv, channel, comfyDir, t]
+    [venv, channel, comfyDir, status, t]
   );
 
   const restartGateway = async () => {
@@ -334,6 +338,8 @@ export function InstallerSection() {
 
   const sys = status?.system;
   const vllm = status?.vllm;
+  const paitonStatus = status?.paiton;
+  const qwenStatus = status?.qwen;
   const hermes = status?.hermes;
   const comfyui = status?.comfyui;
   const lms = status?.lmstudio;
@@ -430,31 +436,45 @@ export function InstallerSection() {
             </div>
             <p className="text-xs text-muted-foreground">{t('inst.channelNote')}</p>
             {sys?.vendor === 'amd' && (
+              paitonStatus?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.paiton')} {paitonStatus.version || ''}
+                </Badge>
+              ) : (
+                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={paiton}
+                    onChange={(e) => setPaiton(e.target.checked)}
+                    className="h-3 w-3 rounded border-input mt-0.5"
+                  />
+                  <span>
+                    {t('inst.paiton')}
+                    <span className="block text-muted-foreground/70">{t('inst.paitonHint')}</span>
+                  </span>
+                </label>
+              )
+            )}
+            {qwenStatus?.installed ? (
+              <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+                {t('inst.qwenTools')}
+              </Badge>
+            ) : (
               <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={paiton}
-                  onChange={(e) => setPaiton(e.target.checked)}
+                  checked={qwenTools}
+                  onChange={(e) => setQwenTools(e.target.checked)}
                   className="h-3 w-3 rounded border-input mt-0.5"
                 />
                 <span>
-                  {t('inst.paiton')}
-                  <span className="block text-muted-foreground/70">{t('inst.paitonHint')}</span>
+                  {t('inst.qwenTools')}
+                  <span className="block text-muted-foreground/70">{t('inst.qwenToolsHint')}</span>
                 </span>
               </label>
             )}
-            <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
-              <input
-                type="checkbox"
-                checked={qwenTools}
-                onChange={(e) => setQwenTools(e.target.checked)}
-                className="h-3 w-3 rounded border-input mt-0.5"
-              />
-              <span>
-                {t('inst.qwenTools')}
-                <span className="block text-muted-foreground/70">{t('inst.qwenToolsHint')}</span>
-              </span>
-            </label>
           </div>
 
           <div className="space-y-2">

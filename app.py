@@ -1693,6 +1693,8 @@ def get_installer_status():
     return jsonify({
         'system': installer.detect_system(),
         'vllm': installer.detect_vllm(venv),
+        'paiton': installer.detect_paiton(venv),
+        'qwen': installer.detect_qwen(venv),
         'hermes': installer.detect_hermes(),
         'comfyui': installer.detect_comfyui(comfy_dir),
         'lmstudio': installer.detect_lmstudio(),

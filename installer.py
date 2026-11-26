@@ -113,6 +113,39 @@ def detect_vllm(venv=None):
     return out
 
 
+def detect_paiton(venv=None):
+    """Is the Paiton plugin installed in the given venv? (AMD-only, fast MXFP4/NVFP4 kernels)"""
+    venv_path = Path(venv or os.path.expanduser('~/vllm-venv')).expanduser()
+    out = {'installed': False, 'version': None, 'detail': ''}
+    if (venv_path / 'bin' / 'python').exists():
+        py = str(venv_path / 'bin' / 'python')
+        rc, txt = _run([py, '-m', 'pip', 'show', 'paiton-vllm-plugin'], timeout=10)
+        if rc == 0 and 'paiton-vllm-plugin' in txt:
+            out['installed'] = True
+            m = re.search(r'Version:\s*(\S+)', txt)
+            out['version'] = m.group(1) if m else None
+        else:
+            out['detail'] = 'paiton-vllm-plugin not in venv'
+    else:
+        out['detail'] = f'no venv at {venv_path}'
+    return out
+
+
+def detect_qwen(venv=None):
+    """Are the Qwen tools installed? (qwen-agent in the venv + qwen-code global CLI)"""
+    venv_path = Path(venv or os.path.expanduser('~/vllm-venv')).expanduser()
+    out = {'installed': False, 'agent': False, 'code': False, 'detail': ''}
+    if (venv_path / 'bin' / 'python').exists():
+        py = str(venv_path / 'bin' / 'python')
+        rc, txt = _run([py, '-m', 'pip', 'show', 'qwen-agent'], timeout=10)
+        if rc == 0 and 'qwen-agent' in txt:
+            out['agent'] = True
+    # qwen-code is a global npm CLI (not in the venv)
+    out['code'] = shutil.which('qwen') is not None
+    out['installed'] = out['agent'] or out['code']
+    return out
+
+
 def detect_hermes():
     """Hermes Agent: installed? version? webapp enabled? webapp reachable?"""
     out = {'installed': False, 'version': None, 'webapp_enabled': None, 'webapp_reachable': False, 'detail': ''}
