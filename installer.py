@@ -146,6 +146,44 @@ def detect_qwen(venv=None):
     return out
 
 
+def detect_docker():
+    """Is Docker installed and is the daemon reachable? (Prerequisite for the Paiton big-brain install.)"""
+    out = {'installed': False, 'running': False, 'detail': ''}
+    if not shutil.which('docker'):
+        out['detail'] = 'docker not found'
+        return out
+    rc, txt = _run(['docker', 'version', '--format', '{{.Server.Version}}'], timeout=10)
+    if rc == 0 and txt.strip():
+        out['installed'] = True
+        out['running'] = True
+        out['detail'] = f"server {txt.strip()}"
+    else:
+        out['installed'] = True
+        out['running'] = False
+        out['detail'] = 'docker client present, daemon not reachable'
+    return out
+
+
+def detect_paiton_docker():
+    """Is the Paiton big-brain Docker container installed/running? (Qwen3.8 on the pinned Paiton image)"""
+    out = {'installed': False, 'running': False, 'image': None, 'version': None, 'detail': ''}
+    if not shutil.which('docker'):
+        out['detail'] = 'docker not found'
+        return out
+    # Is the container present (running or stopped)?
+    rc, txt = _run(['docker', 'ps', '-a', '--filter', 'name=paiton-qwen38', '--format', '{{.Image}}\t{{.Status}}\t{{.Ports}}'], timeout=10)
+    line = (txt.strip().splitlines() or [''])[0]
+    if line:
+        image, status, ports = (line.split('\t') + [''])[:3]
+        out['installed'] = True
+        out['image'] = image.split(':')[0] if ':' in image else image
+        out['running'] = 'Up' in status
+        out['detail'] = status.strip()
+    else:
+        out['detail'] = 'no paiton-qwen38 container'
+    return out
+
+
 def detect_hermes():
     """Hermes Agent: installed? version? webapp enabled? webapp reachable?"""
     out = {'installed': False, 'version': None, 'webapp_enabled': None, 'webapp_reachable': False, 'detail': ''}
@@ -413,6 +451,31 @@ def start_update_job(kind, params):
     so an update always lands on a matching torch/vLLM pair.
     """
     return _start_install_like_job(kind, params, 'update')
+
+
+def start_paiton_job(params):
+    """Start a Paiton big-brain Docker install job (pull image + download weights + recreate container).
+    Returns (job_id, error)."""
+    with JOBS_LOCK:
+        active = _ACTIVE.get('paiton')
+        if active and JOBS.get(active, {}).get('status') == 'running':
+            return None, f'paiton install already running (job {active})'
+        ts = int(time.time())
+        job_id = f'paiton-{ts}'
+        log_file = LOG_DIR / f'paiton_{ts}.log'
+        JOBS[job_id] = {
+            'kind': 'paiton',
+            'status': 'running',
+            'log_file': str(log_file),
+            'started_at': datetime.now().isoformat(),
+        }
+        _ACTIVE['paiton'] = job_id
+    LOG_DIR.mkdir(exist_ok=True)
+    port = str(params.get('port') or 8000)
+    cmd = ['bash', str(SCRIPTS_DIR / 'install_paiton.sh'), port]
+    t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
+    t.start()
+    return job_id, None
 
 
 def start_uninstall_job(kind, params):

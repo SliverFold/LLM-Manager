@@ -1692,9 +1692,11 @@ def get_installer_status():
         jobs = [dict(j) for j in installer.JOBS.values()]
     return jsonify({
         'system': installer.detect_system(),
+        'docker': installer.detect_docker(),
         'vllm': installer.detect_vllm(venv),
         'paiton': installer.detect_paiton(venv),
         'qwen': installer.detect_qwen(venv),
+        'paiton_docker': installer.detect_paiton_docker(),
         'hermes': installer.detect_hermes(),
         'comfyui': installer.detect_comfyui(comfy_dir),
         'lmstudio': installer.detect_lmstudio(),
@@ -1761,6 +1763,19 @@ def update_tool():
     job_id, err = installer.start_update_job(kind, body)
     if err:
         return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/paiton', methods=['POST'])
+def install_paiton():
+    """Install/refresh the Paiton big-brain (Qwen3.8) as a Docker container.
+    Body: {port?} (default 8000). Pulls the pinned Paiton image, downloads the
+    Qwen3.8 model weights (pinned revisions), and recreates the container with
+    the big-brain serve flags. AMD ROCm only.
+    """
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_paiton_job(body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 409
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
 
 @app.route('/api/installer/uninstall', methods=['POST'])

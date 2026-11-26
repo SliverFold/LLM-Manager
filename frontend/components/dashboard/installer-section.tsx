@@ -20,6 +20,8 @@ interface InstallerStatus {
     disk_free_gb: number;
   };
   vllm: { installed: boolean; venv: string; version: string | null; rocm_version: string | null; detail: string };
+  docker: { installed: boolean; running: boolean; detail: string };
+  paiton_docker: { installed: boolean; running: boolean; image: string | null; version: string | null; detail: string };
   paiton: { installed: boolean; version: string | null; detail: string };
   qwen: { installed: boolean; agent: boolean; code: boolean; detail: string };
   hermes: {
@@ -104,6 +106,7 @@ export function InstallerSection() {
   const [qwenTools, setQwenTools] = useState(false);
   const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
   const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
+  const [paitonInstalling, setPaitonInstalling] = useState(false);
   const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [updating, setUpdating] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [removeVenv, setRemoveVenv] = useState(false);
@@ -293,6 +296,39 @@ export function InstallerSection() {
     [venv, channel, comfyDir, status, t]
   );
 
+  const startPaiton = useCallback(
+    async () => {
+      const dockerOk = status?.docker?.installed && status?.docker?.running;
+      if (!dockerOk) {
+        toast.error(t('inst.paitonNoDocker'));
+        return;
+      }
+      if (!window.confirm(t('inst.paitonConfirm'))) return;
+      setPaitonInstalling(true);
+      try {
+        const res = await fetch(getApiUrl('/api/installer/paiton'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setPaitonInstalling(false);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setPaitonInstalling(false);
+      }
+    },
+    [status, t]
+  );
+
   const restartGateway = async () => {
     if (!window.confirm(t('inst.gatewayRestartConfirm'))) return;
     setRestartingGateway(true);
@@ -337,6 +373,8 @@ export function InstallerSection() {
   };
 
   const sys = status?.system;
+  const docker = status?.docker;
+  const paitonDocker = status?.paiton_docker;
   const vllm = status?.vllm;
   const paitonStatus = status?.paiton;
   const qwenStatus = status?.qwen;
@@ -509,6 +547,70 @@ export function InstallerSection() {
                 />
                 {t('inst.removeVenv')}
               </label>
+            )}
+          </div>
+        </CollapsibleCard>
+
+        {/* Paiton big-brain (Qwen3.8) — Docker container install */}
+        <CollapsibleCard
+          icon={<Brain className="h-4 w-4 text-primary" />}
+          title={t('inst.paitonTitle')}
+          headerRight={siteLink('https://github.com/Eliovp-BV/paiton-vllm-plugin')}
+          statusBadges={
+            <>
+              {paitonDocker?.installed ? (
+                paitonDocker.running ? (
+                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    {t('inst.installed')}
+                  </Badge>
+                ) : (
+                  <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                    <AlertCircle className="mr-1 h-3 w-3" />
+                    {t('inst.paitonStopped')}
+                  </Badge>
+                )
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )}
+              {docker && !docker.installed && (
+                <Badge variant="destructive">
+                  <AlertCircle className="mr-1 h-3 w-3" />
+                  {t('inst.paitonNoDocker')}
+                </Badge>
+              )}
+            </>
+          }
+          expanded={expanded.has('paiton')}
+          onToggle={() => toggleCard('paiton')}
+        >
+          <CardDescription>{t('inst.paitonDesc')}</CardDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            {docker && (
+              docker.installed && docker.running ? (
+                <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.paitonDockerOk')}
+                </Badge>
+              ) : (
+                <Badge variant="destructive">
+                  <AlertCircle className="mr-1 h-3 w-3" />
+                  {t('inst.paitonNoDocker')}
+                </Badge>
+              )
+            )}
+            <span className="text-xs text-muted-foreground">{t('inst.paitonSize')}</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              onClick={startPaiton}
+              disabled={paitonInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}
+            >
+              {paitonDocker?.installed ? <RefreshCw className={`h-3 w-3 mr-1 ${paitonInstalling ? 'animate-spin' : ''}`} /> : <Download className="h-3 w-3 mr-1" />}
+              {paitonInstalling ? t('inst.paitonInstalling') : paitonDocker?.installed ? t('inst.paitonUpdate') : t('inst.paitonInstall')}
+            </Button>
+            {paitonDocker?.running && (
+              <span className="text-xs text-muted-foreground font-mono truncate">{paitonDocker.detail}</span>
             )}
           </div>
         </CollapsibleCard>
