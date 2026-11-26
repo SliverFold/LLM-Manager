@@ -199,6 +199,24 @@ export function ServiceDetail({ serviceKey, service, availableGpus = [], onViewL
     }
   };
 
+  const handleAddToHermes = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(getApiUrl('/api/hermes/add-service'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: serviceKey }),
+      });
+      const result = await response.json();
+      if (result.success) toast.success(t('sd.addToHermesSuccess', { profile: result.profile }));
+      else toast.error(t('sd.addToHermesFailed', { msg: result.message }));
+    } catch (error) {
+      toast.error(t('sd.addToHermesFailed', { msg: error instanceof Error ? error.message : t('page.unknownError') }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <Card className="bg-card border border-border/50">
       <CardHeader>

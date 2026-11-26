@@ -7,6 +7,7 @@ import { ThroughputChart } from '@/components/dashboard/throughput-chart';
 import { ComfyUIStats } from '@/components/dashboard/comfyui-stats';
 import { LogsViewer } from '@/components/dashboard/logs-viewer';
 import { AddServiceDialog } from '@/components/dashboard/add-service-dialog';
+import { InstallerSection } from '@/components/dashboard/installer-section';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
@@ -192,6 +193,7 @@ export default function DashboardPage() {
             ) : null}
           </section>
 
+          <InstallerSection />
         </div>
       </main>
 

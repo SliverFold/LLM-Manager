@@ -51,6 +51,36 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
     }
   };
 
+  // Open a model's chat in a Hermes Webapp tab (one-use launch ticket, like openHermes).
+  // Each model maps to a Hermes profile: lmstudio -> small-brain, big -> default.
+  const openModelChat = async (key: string) => {
+    const profile = key === 'lmstudio' ? 'small-brain' : '';
+    const win = window.open('about:blank', '_blank');
+    const fail = (msg: string) => {
+      if (win) {
+        win.document.title = 'Chat failed';
+        win.document.body.innerHTML =
+          '<div style="font-family:sans-serif;padding:2rem;max-width:40rem"><h2>Could not open chat</h2><p>' + msg + '</p></div>';
+        win.focus();
+      } else {
+        alert('Could not open chat: ' + msg);
+      }
+    };
+    try {
+      const url = `/api/hermes/webapp-link${profile ? `?profile=${profile}` : ''}`;
+      const res = await fetch(getApiUrl(url));
+      const data = await res.json();
+      if (data.success && data.url) {
+        if (win) win.location.href = data.url;
+        else window.open(data.url, '_blank');
+      } else {
+        fail(data.message || 'unknown error');
+      }
+    } catch (e: any) {
+      fail(e?.message || String(e));
+    }
+  };
+
   const [restarting, setRestarting] = useState(false);
 
   // Live "last updated" time for the footer: the systemInfo object is replaced
@@ -135,7 +165,7 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
             {Object.entries(services).map(([key, svc]) => (
               <button
                 key={key}
-                onClick={() => window.open(`/api/service/${key}/chat`, '_blank')}
+                onClick={() => openModelChat(key)}
                 className="w-full flex items-center justify-between gap-2 rounded-lg border border-sidebar-border bg-sidebar-accent/50 px-3 py-1.5 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
                 title={`Open a chat with ${svc.name} in a new tab`}
               >

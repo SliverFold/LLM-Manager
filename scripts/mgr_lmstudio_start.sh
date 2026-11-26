@@ -6,6 +6,9 @@ set -euo pipefail
 LMS=~/.lmstudio/bin/lms
 PORT="${PORT:-45987}"
 
+# Ensure the temp dir exists (LM Studio's mkdtemp fails if it's missing)
+mkdir -p ~/.lmstudio/.internal/temp
+
 # Check if the server is already running (match "running" but not "not running")
 if "$LMS" server status 2>&1 | grep -qi "running" && ! "$LMS" server status 2>&1 | grep -qi "not running"; then
     echo "LM Studio server already running"

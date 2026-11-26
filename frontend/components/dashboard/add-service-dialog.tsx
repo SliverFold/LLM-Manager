@@ -87,10 +87,17 @@ export function AddServiceDialog({ open, onOpenChange, gpus = [], onGenerated }:
 
   const [loaderKey, setLoaderKey] = useState('');
   const [model, setModel] = useState('');
+  const [manualPath, setManualPath] = useState('');
   const [selectedGpus, setSelectedGpus] = useState<number[]>([]);
   const [port, setPort] = useState<number>(8000);
   const [params, setParams] = useState<Record<string, number | string>>({});
   const [saving, setSaving] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
+  const [browseDir, setBrowseDir] = useState('');
+  const [browseFiles, setBrowseFiles] = useState<{ name: string; path: string; size_gb: number }[]>([]);
+  const [browseDirs, setBrowseDirs] = useState<{ name: string; path: string }[]>([]);
+  const [browseParent, setBrowseParent] = useState<string | null>(null);
+  const [browseError, setBrowseError] = useState('');
 
   const loader = loaders?.[loaderKey];
   const installedLoaders = loaders
@@ -113,12 +120,35 @@ export function AddServiceDialog({ open, onOpenChange, gpus = [], onGenerated }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaderKey]);
 
+  // Fetch the contents of a directory for the manual model picker.
+  const loadBrowse = async (dir: string) => {
+    setBrowsing(true);
+    setBrowseError('');
+    try {
+      const res = await fetch(getApiUrl(`/api/models/browse?dir=${encodeURIComponent(dir)}`));
+      const data = await res.json();
+      if (!data.success) {
+        setBrowseError(data.message || 'unknown error');
+        return;
+      }
+      setBrowseDir(data.dir);
+      setBrowseFiles(data.files || []);
+      setBrowseDirs(data.dirs || []);
+      setBrowseParent(data.parent || null);
+    } catch (e: any) {
+      setBrowseError(e?.message || String(e));
+    } finally {
+      setBrowsing(false);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!loaderKey) {
       toast.error(t('asd.selectLoader'));
       return;
     }
-    if (loader?.requires_model && !model) {
+    const chosenModel = manualPath || model;
+    if (loader?.requires_model && !chosenModel) {
       toast.error(t('asd.selectModelToast'));
       return;
     }
@@ -130,7 +160,7 @@ export function AddServiceDialog({ open, onOpenChange, gpus = [], onGenerated }:
     try {
       const body: Record<string, unknown> = {
         loader: loaderKey,
-        model: model || undefined,
+        model: chosenModel || undefined,
         gpus: selectedGpus,
         port: loader?.fixed_port ? undefined : port,
         params,
@@ -205,10 +235,10 @@ export function AddServiceDialog({ open, onOpenChange, gpus = [], onGenerated }:
               <label className="text-sm font-medium">{t('asd.model')}</label>
               <select
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                onChange={(e) => { setModel(e.target.value); setManualPath(''); }}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
               >
-                <option value="" className="bg-background">
+                <option value="">
                   {t('asd.selectModel')}{loaderModels.length === 0 ? t('asd.noneFound') : ''}
                 </option>
                 {loaderModels.map((m) => (
@@ -220,6 +250,71 @@ export function AddServiceDialog({ open, onOpenChange, gpus = [], onGenerated }:
                   </option>
                 ))}
               </select>
+
+              {/* Manual path / browse — for models the scan didn't find */}
+              <div className="space-y-1">
+                <label className="text-sm font-medium">{t('asd.manualPath')}</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={manualPath}
+                    onChange={(e) => setManualPath(e.target.value)}
+                    placeholder={t('asd.manualPathHint')}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  />
+                  <Button variant="outline" onClick={() => loadBrowse(manualPath || '~')} disabled={browsing}>
+                    {browsing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                    {t('asd.browse')}
+                  </Button>
+                </div>
+
+                {(browseDir || browsing) && (
+                  <div className="mt-2 max-h-[240px] overflow-y-auto border rounded-md p-2 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="truncate">{browseDir}</span>
+                      {browseParent && (
+                        <Button variant="ghost" className="h-6 px-2 text-xs" onClick={() => loadBrowse(browseParent!)}>
+                          {t('asd.browseUp')}
+                        </Button>
+                      )}
+                    </div>
+                    {browseError && <p className="text-xs text-red-500">{browseError}</p>}
+                    {browseFiles.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground">{t('asd.browseFiles')}</p>
+                        {browseFiles.map((f) => (
+                          <button
+                            key={f.path}
+                            onClick={() => { setManualPath(f.path); setModel(''); }}
+                            className={`w-full text-left text-sm px-2 py-1 rounded hover:bg-accent ${manualPath === f.path ? 'bg-accent' : ''}`}
+                          >
+                            {f.name}
+                            {f.size_gb ? ` (${f.size_gb} GB)` : ''}
+                            {manualPath === f.path ? ` — ${t('asd.browseSelected')}` : ''}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {browseDirs.length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground">{t('asd.browseDirs')}</p>
+                        {browseDirs.map((d) => (
+                          <button
+                            key={d.path}
+                            onClick={() => loadBrowse(d.path)}
+                            className="w-full text-left text-sm px-2 py-1 rounded hover:bg-accent"
+                          >
+                            📁 {d.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {browseFiles.length === 0 && browseDirs.length === 0 && !browseError && !browsing && (
+                      <p className="text-xs text-muted-foreground">{t('asd.browseEmpty')}</p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

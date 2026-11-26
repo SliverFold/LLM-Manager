@@ -1,0 +1,465 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { toast } from 'sonner';
+import { getApiUrl } from '@/lib/api-config';
+import { useLang } from '@/lib/i18n';
+import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon } from 'lucide-react';
+
+interface InstallerStatus {
+  system: {
+    vendor: string;
+    vendor_detail: string;
+    python: string | null;
+    python312: string | null;
+    uv: string | null;
+    disk_free_gb: number;
+  };
+  vllm: { installed: boolean; venv: string; version: string | null; rocm_version: string | null; detail: string };
+  hermes: {
+    installed: boolean;
+    version: string | null;
+    webapp_enabled: boolean | null;
+    webapp_reachable: boolean;
+    detail: string;
+  };
+  comfyui: { installed: boolean; dir: string; detail: string };
+  jobs: { kind: string; status: string; log_file: string; started_at: string }[];
+}
+
+export function InstallerSection() {
+  const { t } = useLang();
+  const [status, setStatus] = useState<InstallerStatus | null>(null);
+  const [venv, setVenv] = useState('~/vllm-venv');
+  const [channel, setChannel] = useState<'nightly' | 'stable'>('nightly');
+  const [paiton, setPaiton] = useState(false);
+  const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
+  const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui'>(null);
+  const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes'>(null);
+  const [removeVenv, setRemoveVenv] = useState(false);
+  const [logJob, setLogJob] = useState<string | null>(null);
+  const [logJobType, setLogJobType] = useState<'install' | 'uninstall'>('install');
+  const [logText, setLogText] = useState('');
+  const [logStatus, setLogStatus] = useState('running');
+  const [restartingGateway, setRestartingGateway] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Poll the detection status (venv changes what we check for vLLM).
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(getApiUrl(`/api/installer/status?venv=${encodeURIComponent(venv)}&comfy_dir=${encodeURIComponent(comfyDir)}`));
+        const data: InstallerStatus = await res.json();
+        if (active) setStatus(data);
+      } catch {
+        // backend briefly down — ignore
+      }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [venv, comfyDir]);
+
+  // Live log while an install job is running (or just finished).
+  useEffect(() => {
+    if (!logJob) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(getApiUrl(`/api/installer/logs?job=${encodeURIComponent(logJob)}`));
+        const data: { success: boolean; logs: string; status: string } = await res.json();
+        if (!active) return;
+        if (data.success) {
+          setLogText(data.logs || '');
+          setLogStatus(data.status);
+          if (data.status !== 'running') {
+            setInstalling(null);
+            setUninstalling(null);
+            setLogJob(null);
+            const done = data.status === 'done';
+            toast.success(
+              done
+                ? (logJobType === 'uninstall' ? t('inst.uninstallDone') : t('inst.installDone'))
+                : (logJobType === 'uninstall' ? t('inst.uninstallFailed') : t('inst.installFailed'))
+            );
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [logJob, logJobType, t]);
+
+  // Keep the log scrolled to the bottom while new lines arrive.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [logText]);
+
+  const startInstall = useCallback(
+    async (kind: 'vllm' | 'hermes' | 'comfyui') => {
+      const body = kind === 'vllm' ? { venv, channel, paiton } : kind === 'comfyui' ? { dir: comfyDir } : {};
+      setInstalling(kind);
+      try {
+        const res = await fetch(getApiUrl(`/api/installer/${kind}`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setInstalling(null);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setInstalling(null);
+      }
+    },
+    [venv, channel, paiton, comfyDir, t]
+  );
+
+  const startUninstall = useCallback(
+    async (kind: 'vllm' | 'hermes') => {
+      if (kind === 'vllm') {
+        if (!window.confirm(t('inst.uninstallConfirm', { venv: venv }))) return;
+      } else {
+        if (!window.confirm(t('inst.disableWebappConfirm'))) return;
+      }
+      setUninstalling(kind);
+      try {
+        const body = kind === 'vllm' ? { venv, remove_venv: removeVenv } : {};
+        const res = await fetch(getApiUrl('/api/installer/uninstall'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('uninstall');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.uninstallStartFailed'));
+          setUninstalling(null);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.uninstallStartFailed', { msg: e?.message || String(e) }));
+        setUninstalling(null);
+      }
+    },
+    [venv, removeVenv, t]
+  );
+
+  const restartGateway = async () => {
+    if (!window.confirm(t('inst.gatewayRestartConfirm'))) return;
+    setRestartingGateway(true);
+    try {
+      const res = await fetch(getApiUrl('/api/installer/gateway/restart'), { method: 'POST' });
+      const data: { success: boolean; message?: string } = await res.json();
+      if (data.success) toast.success(data.message || t('inst.gatewayRestarting'));
+      else toast.error(data.message || t('inst.gatewayRestartFailed'));
+    } catch (e: any) {
+      toast.error(t('inst.gatewayRestartFailed', { msg: e?.message || String(e) }));
+    } finally {
+      setRestartingGateway(false);
+    }
+  };
+
+  // Open the Hermes Web UI in a new tab via a one-use launch ticket (minted by
+  // the gateway) — a plain :9120 tab has no session and shows the sign-in wall.
+  const openWebUi = async () => {
+    const win = window.open('about:blank', '_blank');
+    const fail = (msg: string) => {
+      if (win) {
+        win.document.title = 'Web UI failed';
+        win.document.body.innerHTML =
+          '<div style="font-family:sans-serif;padding:2rem;max-width:40rem"><h2>Could not open Web UI</h2><p>' + msg + '</p></div>';
+        win.focus();
+      } else {
+        alert('Could not open Web UI: ' + msg);
+      }
+    };
+    try {
+      const res = await fetch(getApiUrl('/api/hermes/webapp-link'));
+      const data: { success: boolean; url?: string; message?: string } = await res.json();
+      if (data.success && data.url) {
+        if (win) win.location.href = data.url;
+        else window.open(data.url, '_blank');
+      } else {
+        fail(data.message || 'unknown error');
+      }
+    } catch (e: any) {
+      fail(e?.message || String(e));
+    }
+  };
+
+  const sys = status?.system;
+  const vllm = status?.vllm;
+  const hermes = status?.hermes;
+  const comfyui = status?.comfyui;
+
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-6">
+        <Download className="h-5 w-5 text-primary" />
+        <h2 className="text-xl font-display font-bold text-foreground">{t('inst.title')}</h2>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* vLLM card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Cpu className="h-4 w-4 text-primary" />
+              vLLM
+            </CardTitle>
+            <CardDescription>{t('inst.vllmDesc')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {sys && (
+                <Badge variant="secondary">
+                  {sys.vendor === 'amd'
+                    ? 'AMD GPU'
+                    : sys.vendor === 'nvidia'
+                      ? `NVIDIA ${sys.vendor_detail}`
+                      : t('inst.noGpuStack')}
+                </Badge>
+              )}
+              {vllm?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.installed')} {vllm.version}
+                </Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )}
+              {vllm?.installed && vllm.rocm_version && (
+                <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                  {t('inst.rocmVersion')} {vllm.rocm_version}
+                </Badge>
+              )}
+              {sys && <span className="text-xs text-muted-foreground">{sys.disk_free_gb} GB free</span>}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">{t('inst.venvLabel')}</label>
+              <input
+                value={venv}
+                onChange={(e) => setVenv(e.target.value)}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+                placeholder="~/vllm-venv"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">{t('inst.channelLabel')}</label>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant={channel === 'nightly' ? 'default' : 'outline'}
+                  onClick={() => setChannel('nightly')}
+                >
+                  {t('inst.nightly')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant={channel === 'stable' ? 'default' : 'outline'}
+                  onClick={() => setChannel('stable')}
+                >
+                  {t('inst.stable')}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">{t('inst.channelNote')}</p>
+              {sys?.vendor === 'amd' && (
+                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={paiton}
+                    onChange={(e) => setPaiton(e.target.checked)}
+                    className="h-3 w-3 rounded border-input mt-0.5"
+                  />
+                  <span>
+                    {t('inst.paiton')}
+                    <span className="block text-muted-foreground/70">{t('inst.paitonHint')}</span>
+                  </span>
+                </label>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null}>
+                  <Download className="h-3 w-3 mr-1" />
+                  {installing === 'vllm' ? t('inst.installing') : t('inst.install')}
+                </Button>
+                {vllm?.installed && (
+                  <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null}>
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    {uninstalling === 'vllm' ? t('inst.uninstalling') : t('inst.uninstall')}
+                  </Button>
+                )}
+                {vllm?.installed && (
+                  <span className="text-xs text-muted-foreground font-mono truncate">{vllm.venv}</span>
+                )}
+              </div>
+              {vllm?.installed && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={removeVenv}
+                    onChange={(e) => setRemoveVenv(e.target.checked)}
+                    className="h-3 w-3 rounded border-input"
+                  />
+                  {t('inst.removeVenv')}
+                </label>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* right column: Hermes (compact) + ComfyUI stacked */}
+        <div className="flex flex-col gap-6">
+          {/* Hermes webapp card (compact) */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2">
+                <Bot className="h-4 w-4 text-primary" />
+                {t('inst.hermesTitle')}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {hermes?.installed ? (
+                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    {t('inst.installed')} {hermes.version}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+                )}
+                {hermes && (
+                  <>
+                    {hermes.webapp_enabled === true && <Badge variant="secondary">{t('inst.webappEnabled')}</Badge>}
+                    {hermes.webapp_reachable && (
+                      <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{t('inst.webappUp')}</Badge>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button onClick={() => startInstall('hermes')} disabled={installing !== null}>
+                  <Download className="h-3 w-3 mr-1" />
+                  {installing === 'hermes' ? t('inst.installing') : t('inst.install')}
+                </Button>
+                {hermes?.installed && (
+                  <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
+                    <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
+                    {t('inst.restartGateway')}
+                  </Button>
+                )}
+                {hermes?.installed && hermes.webapp_enabled === true && (
+                  <Button variant="outline" onClick={() => startUninstall('hermes')} disabled={uninstalling !== null || installing !== null}>
+                    <XCircle className="h-3 w-3 mr-1" />
+                    {uninstalling === 'hermes' ? t('inst.uninstalling') : t('inst.disableWebapp')}
+                  </Button>
+                )}
+                {hermes?.webapp_reachable && (
+                  <Button variant="ghost" size="sm" onClick={openWebUi}>
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    {t('inst.openWebUi')}
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ComfyUI card */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2">
+                <ImageIcon className="h-4 w-4 text-primary" />
+                {t('inst.comfyuiTitle')}
+              </CardTitle>
+              <CardDescription>{t('inst.comfyuiDesc')}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {comfyui?.installed ? (
+                  <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    {t('inst.installed')}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground">{t('inst.comfyuiDirLabel')}</label>
+                <input
+                  value={comfyDir}
+                  onChange={(e) => setComfyDir(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+                  placeholder="~/ComfyUI-plain"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button onClick={() => startInstall('comfyui')} disabled={installing !== null || uninstalling !== null}>
+                  <Download className="h-3 w-3 mr-1" />
+                  {installing === 'comfyui' ? t('inst.installing') : t('inst.install')}
+                </Button>
+                {comfyui?.installed && (
+                  <span className="text-xs text-muted-foreground font-mono truncate">{comfyui.dir}</span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Live install log */}
+      <Dialog open={logJob !== null} onOpenChange={(open) => { if (!open) { setLogJob(null); setInstalling(null); setUninstalling(null); } }}>
+        <DialogContent className="max-w-4xl max-h-[80vh] bg-background/95 backdrop-blur-xl border-border shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display flex items-center gap-2">
+              {logStatus === 'running' ? (
+                <RefreshCw className="h-4 w-4 text-primary animate-spin" />
+              ) : logStatus === 'done' ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <AlertCircle className="h-4 w-4 text-destructive" />
+              )}
+              {t('inst.logTitle')}
+            </DialogTitle>
+          </DialogHeader>
+          <div ref={scrollRef} className="mt-4 bg-black/50 rounded-lg p-4 max-h-[60vh] overflow-y-auto border border-border/50 custom-scrollbar">
+            <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">{logText || t('inst.logWaiting')}</pre>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}

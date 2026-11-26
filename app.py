@@ -700,16 +700,23 @@ def get_hermes_webapp_link():
     plain new tab at the base URL has no session token and shows "Sign in to
     Hermes". We ask ``hermes webapp`` for a fresh link and hand it back; the
     button opens it immediately (well inside the 60s window).
+
+    Optional ?profile=<name> param mints the link for that profile (default:
+    the active/default profile).
     """
+    profile = request.args.get('profile', '')
     try:
         env = os.environ.copy()
         env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        cmd = ['hermes', 'webapp', '--no-open', '--skip-build']
+        if profile:
+            cmd = ['hermes', '-p', profile, 'webapp', '--no-open', '--skip-build']
         result = subprocess.run(
-            ['hermes', 'webapp', '--no-open', '--skip-build'],
+            cmd,
             capture_output=True, text=True, timeout=20, env=env
         )
         output = (result.stdout or '') + (result.stderr or '')
-        # Preferred: the one-use launch link (http://127.0.0.1:9120/webapp/launch#ticket=...)
+        # Preferred: the one-use launch link (http://127.0.0.1:9120/webapp/launch#ticket=...
         m = re.search(r'https?://\S+/webapp/launch#[^\s]+', output)
         if not m:
             # Fallback: a plain sign-in URL (Webapp behind dashboard sign-in)
@@ -1193,6 +1200,39 @@ def get_models():
 
     return jsonify(models)
 
+@app.route('/api/models/browse')
+def browse_models():
+    """List model files/dirs inside a directory (for the manual model picker).
+
+    ?dir=<abs path> — returns model files (.gguf/.safetensors/.bin) and
+    subdirectories so the UI can navigate the filesystem to find a model
+    that the automatic scan didn't cover.
+    """
+    import os
+    d = request.args.get('dir') or os.path.expanduser('~')
+    d = os.path.expanduser(d.strip())
+    if not os.path.isdir(d):
+        return jsonify({'success': False, 'message': f'Not a directory: {d}'}), 400
+    files, dirs = [], []
+    try:
+        for name in sorted(os.listdir(d)):
+            p = os.path.join(d, name)
+            if os.path.isdir(p):
+                dirs.append({'name': name, 'path': p})
+            elif name.endswith(('.gguf', '.safetensors', '.bin')):
+                try:
+                    size = os.path.getsize(p)
+                except OSError:
+                    size = 0
+                files.append({
+                    'name': name, 'path': p,
+                    'size_gb': round(size / 1024 ** 3, 2),
+                })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    parent = os.path.dirname(d) if d != os.path.expanduser('~') else None
+    return jsonify({'success': True, 'dir': d, 'parent': parent, 'files': files, 'dirs': dirs})
+
 @app.route('/api/services/generate', methods=['POST'])
 def generate_service():
     """Generate a service entry + start/stop scripts from loader + model + params.
@@ -1438,6 +1478,105 @@ def get_comfyui_logs():
             return jsonify({'success': False, 'message': 'No log file yet — launch ComfyUI via ~/Desktop/AI/comfyui-9070.sh (or -9700.sh); output is captured there'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
+
+# --- Installer (vLLM + Hermes webapp) ---
+import installer
+
+@app.route('/api/installer/status')
+def get_installer_status():
+    """Detection state: system (GPU vendor, python, uv), vLLM, Hermes, ComfyUI, running jobs."""
+    venv = request.args.get('venv') or os.path.expanduser('~/vllm-venv')
+    comfy_dir = request.args.get('comfy_dir') or os.path.expanduser('~/ComfyUI-plain')
+    with installer.JOBS_LOCK:
+        jobs = [dict(j) for j in installer.JOBS.values()]
+    return jsonify({
+        'system': installer.detect_system(),
+        'vllm': installer.detect_vllm(venv),
+        'hermes': installer.detect_hermes(),
+        'comfyui': installer.detect_comfyui(comfy_dir),
+        'jobs': jobs,
+    })
+
+@app.route('/api/installer/vllm', methods=['POST'])
+def install_vllm():
+    """Start a vLLM install job. Body: {venv?, channel?: 'nightly'|'stable'}."""
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_job('vllm', body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/hermes', methods=['POST'])
+def install_hermes():
+    """Start a Hermes + webapp install job."""
+    job_id, err = installer.start_job('hermes', {})
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/comfyui', methods=['POST'])
+def install_comfyui():
+    """Start a ComfyUI install job. Body: {dir?}."""
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_job('comfyui', body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/uninstall', methods=['POST'])
+def uninstall():
+    """Start an uninstall job. Body: {kind: 'vllm'|'hermes', venv?, remove_venv?}.
+
+    vLLM: pip-uninstalls vLLM from the venv (optionally removes the venv).
+    Hermes: disables the webapp (safe reverse — does not remove the running agent).
+    """
+    body = request.get_json(silent=True) or {}
+    kind = body.get('kind')
+    if kind not in ('vllm', 'hermes'):
+        return jsonify({'success': False, 'message': 'kind must be vllm or hermes'}), 400
+    job_id, err = installer.start_uninstall_job(kind, body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/logs')
+def get_installer_logs():
+    """Tail a job's log (job id from the install POST response)."""
+    txt, job = installer.tail_job_log(request.args.get('job') or '', lines=200)
+    if not job:
+        return jsonify({'success': False, 'message': 'Unknown job id'}), 404
+    return jsonify({'success': True, 'logs': txt, 'status': job['status'], 'job': job['kind']})
+
+@app.route('/api/installer/gateway/restart', methods=['POST'])
+def restart_hermes_gateway():
+    """Restart the Hermes gateway (loads the webapp after install).
+
+    The manager backend is a separate process from the gateway, so this is
+    allowed (the self-termination guard only blocks restarts from inside a
+    gateway session). The desktop app / webapp UI will reconnect in a few
+    seconds.
+    """
+    hermes = shutil.which('hermes')
+    if not hermes:
+        for cand in (
+            Path.home() / '.hermes' / 'hermes-agent' / '.hermes' / 'bin' / 'hermes',
+            Path.home() / '.local' / 'bin' / 'hermes',
+        ):
+            if cand.exists():
+                hermes = str(cand)
+                break
+    if not hermes:
+        return jsonify({'success': False, 'message': 'hermes not found — install Hermes first'}), 400
+    try:
+        subprocess.Popen(
+            ['bash', '-c', f'{hermes} gateway restart'],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return jsonify({'success': True, 'message': 'Hermes gateway restarting — the UI will reconnect in a few seconds.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to restart gateway: {e}'}), 500
 
 if __name__ == '__main__':
     # Start the service

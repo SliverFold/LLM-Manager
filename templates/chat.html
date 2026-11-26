@@ -85,11 +85,10 @@
   </footer>
   <script>
     const PORT = {{ port }};
-    // LM Studio uses a metrics proxy (port 11436) to capture throughput stats.
-    // Other loaders connect to the server directly.
-    const USE_PROXY = {{ loader }} === 'lmstudio';
-    const PROXY_PORT = 11436;
-    const BASE = `http://127.0.0.1:${USE_PROXY ? PROXY_PORT : PORT}/v1`;
+    // Connect directly to the service's own server. (The LM Studio metrics
+    // proxy on port 11436 is only for throughput stats, not for chat — the
+    // real model server is on the service's own port, e.g. 45987.)
+    const BASE = `http://127.0.0.1:${PORT}/v1`;
     const chat = document.getElementById('chat');
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send');
