@@ -11,7 +11,9 @@ class LMStudioLoader(Loader):
     name = 'LM Studio'
     requires_model = True   # select which model to load in the new server
     fixed_port = 45987
-    param_schema = []
+    param_schema = [
+        {'name': 'context_length', 'label': 'Max Context Length (tokens)', 'type': 'int', 'default': 102400, 'min': 256, 'max': 262144},
+    ]
 
     def detect(self):
         binary = which('lms')
@@ -71,8 +73,9 @@ class LMStudioLoader(Loader):
         port = self.fixed_port
         log_file = f'/home/{os.getlogin()}/logs/lmstudio.log'
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        ctx = int(params.get('context_length') or 102400)
         # If a model is specified, load it after the server starts.
-        load_cmd = f'lms load "{model}" 2>&1 || echo "Model load failed"\n' if model else ''
+        load_cmd = f'lms load "{model}" --context-length {ctx} 2>&1 || echo "Model load failed"\n' if model else ''
         # Start the headless daemon, server, and load the model.
         start = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -119,6 +122,6 @@ echo "LM Studio stopped (server + daemon + backend)"
             'log_file': log_file,
             'loader': self.key,
             'generated': True,
-            'default_params': {'gpus': params.get('gpus') or [], 'port': port},
+            'default_params': {'gpus': params.get('gpus') or [], 'port': port, 'context_length': ctx},
         }
         return {'service': service, 'start_script': start_path, 'stop_script': stop_path}
