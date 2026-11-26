@@ -51,9 +51,11 @@ plus a live **Running / Stopped** badge. Use **Unload all** to stop everything
 at once. The left sidebar shows a live system monitor: per-GPU VRAM,
 utilization, temperature, and power, plus CPU, memory, and disk.
 
-The sidebar's **LLM Manager** button (below the language toggle) checks
+The sidebar's **Manager Update** button (below the language toggle) checks
 GitHub for updates to the manager itself: it lists the new commits and lets
-you install them (fast-forward pull + rebuild + restart) or decline.
+you install them (fast-forward pull + rebuild + restart) or decline. Each
+installed update bumps the manager's version (shown in the sidebar footer —
+0.5.1, 0.5.2, and so on).
 
 ### Chat with your models
 
@@ -65,7 +67,9 @@ model that's running — no extra setup.
 Click **Add Service** and pick a backend (e.g. vLLM), a model, and the GPU(s)
 to use. The manager finds the model for you (it scans your model folders) and
 generates the start/stop scripts automatically. You can also browse the
-filesystem to point at a model the scan missed.
+filesystem to point at a model the scan missed. The **HuggingFace** button
+next to it opens the HuggingFace model hub in a new tab, so you can browse
+and download models before adding a service.
 
 ### Install tools with one click
 
