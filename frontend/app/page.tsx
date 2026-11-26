@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { useState } from 'react';
-import { Server, ChevronDown, PowerOff, Plus } from 'lucide-react';
+import { Server, ChevronDown, PowerOff, Plus, Brain } from 'lucide-react';
 import { toast } from 'sonner';
 import { getApiUrl } from '@/lib/api-config';
 import { useLang } from '@/lib/i18n';
@@ -154,6 +154,14 @@ export default function DashboardPage() {
               <Server className="h-5 w-5 text-primary" />
               <h2 className="text-xl font-display font-bold text-foreground">{t('page.modelServices')}</h2>
               <div className="ml-auto flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => window.open('https://huggingface.co/models', '_blank', 'noopener')}
+                >
+                  <Brain className="h-3 w-3 mr-1" />
+                  {t('page.huggingface')}
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"

@@ -42,6 +42,7 @@ const en: Record<string, string> = {
   'sidebar.checkFailed': 'Could not check for updates: {msg}',
   'sidebar.localAhead': 'Your local checkout has commits that are not on GitHub (diverged) — resolve manually before updating.',
   'page.modelServices': 'Model Services',
+  'page.huggingface': 'HuggingFace',
   'page.addService': 'Add Service',
   'page.unloadAll': 'Unload all',
   'page.unloading': 'Unloading…',
