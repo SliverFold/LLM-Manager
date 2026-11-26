@@ -10,6 +10,7 @@ terminal required.
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)]()
 [![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Fork of](https://img.shields.io/badge/fork%20of-vllm%20model%20manager-brightgreen)](https://github.com/shihaohou/vllm-model-manager-)
 
 </div>
 
@@ -78,6 +79,9 @@ The **Installers** section at the bottom of the page installs:
   wheels for your GPU (AMD ROCm or NVIDIA CUDA). On AMD you can also add the
   Paiton plugin for faster quantized-model performance, and optionally the
   Qwen tools (Qwen-Agent + Qwen Code, pointed at your local endpoint).
+  The vLLM card also has a **Download a vLLM model** dropdown — pick from a
+  curated list of the newest models (Qwen 3.5/3.8, Gemma 4, and more) in
+  Q4/4-bit quantizations and download them with one click.
 - **Hermes Agent + Web UI** — the AI assistant and its browser workspace
   (port 9120).
 - **OpenViking — Hermes memory** — long-term memory for Hermes: the
@@ -90,7 +94,15 @@ The **Installers** section at the bottom of the page installs:
   buttons: Start opens a GPU picker so you choose which card to run on, and
   **Open UI** opens the web interface in a new tab.
 - **LM Studio + Beledarian Suite** — the LM Studio app (any Linux distro)
-  plus Beledarian's Toolbox, the agentic AI suite of LLM tools.
+  plus Beledarian's Toolbox, the agentic AI suite of LLM tools. The LM Studio
+  card also has a **Download an LM Studio model** dropdown — pick from a
+  curated list of GGUF models (Qwen 3.5/3.8, Gemma 4, and more) in Q4
+  quantizations and download them with one click.
+- **Paiton (release models)** — serves any Paiton release model as a Docker
+  container: pick from a dropdown (Qwen3.8 27B, GPT-OSS 20B, MiniCPM5 2B,
+  Ornith 1.5 35B, Qwen3-Coder 30B, Qwen3.8 NEO CODER MAX), and the installer
+  pulls the pinned Paiton vLLM image and starts the server. Requires Docker
+  and an AMD GPU.
 
 Each card shows whether the tool is already installed, and a small
 **Website** link opens the project's site in a new tab so you can see what
@@ -232,7 +244,9 @@ The **Add Service** dialog in the UI generates entries like this for you.
 | `GET /api/system` | CPU / memory / disk usage |
 | `GET /api/models` | Scan of installed models (HF cache, GGUF dirs, loader APIs) |
 | `GET /api/models/browse?dir=/path` | List a directory (manual model picker) |
-| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking}` · `POST /api/installer/uninstall` (kind: vllm, hermes, comfyui, lmstudio, openviking) | Installers |
+| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking,paiton}` · `POST /api/installer/uninstall` (kind: vllm, hermes, comfyui, lmstudio, openviking) | Installers |
+| `GET /api/installer/vllm-models` · `POST /api/installer/vllm-model` (body: `{"slug": "<slug>"}`) | vLLM model downloader (curated list + download) |
+| `GET /api/installer/lmstudio-models` · `POST /api/installer/lmstudio-model` (body: `{"slug": "<slug>"}`) | LM Studio model downloader (curated list + download) |
 | `GET /api/comfyui/status` · `POST /api/comfyui/start` (body: `{"gpu": <index>}`) · `POST /api/comfyui/stop` · `GET /api/comfyui/logs` | ComfyUI start/stop + logs |
 | `GET /api/hermes/webapp-link?profile=<name>` | One-use link to the Hermes web UI |
 
@@ -273,4 +287,5 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+- 0.5.2 (2026-11-26): Model downloaders (vLLM + LM Studio, curated newest models in Q4/4-bit), Paiton release-model installer (any model, not just Qwen3.8), fork-of badge restored.
 - 0.5.1 (2026-11-26): ComfyUI start/stop + GPU picker, Open UI button, OpenViking + LM Studio installers, LLM Manager updater.
