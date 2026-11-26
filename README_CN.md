@@ -55,11 +55,12 @@ cd LLM-Manager
 
 页面底部的 **安装器（Installers）** 区域可以安装：
 
-- **vLLM** —— 高性能 LLM 推理引擎。安装器会自动为你的 GPU 选择正确的 wheel（AMD ROCm 或 NVIDIA CUDA）。AMD 用户还可以加装 Paiton 插件（提升量化模型性能），以及可选的 Qwen 工具（Qwen-Agent + Qwen Code，指向本地端点）。
+- **vLLM** —— 高性能 LLM 推理引擎。安装器会自动为你的 GPU 选择正确的 wheel（AMD ROCm 或 NVIDIA CUDA）。AMD 用户还可以加装 Paiton 插件（提升量化模型性能），以及可选的 Qwen 工具（Qwen-Agent + Qwen Code，指向本地端点）。vLLM 卡片还有 **下载 vLLM 模型（Download a vLLM model）** 下拉菜单 —— 从精选的最新模型列表（Qwen 3.5/3.8、Gemma 4 等）中选择 Q4/4-bit 量化版本，一键下载。
 - **Hermes Agent + Web UI** —— AI 助手及其浏览器工作区（端口 9120）。
 - **OpenViking —— Hermes 记忆** —— Hermes 的长期记忆：OpenViking 服务器（端口 1934）、CPU 嵌入服务（bge-small-en-v1.5 GGUF 经 llama.cpp，端口 8091，零 VRAM）、Hermes 记忆插件以及 Hermes 记忆配置。全部以 systemd 用户服务运行，自动重启。
 - **ComfyUI** —— AI 图像/视频生成框架。安装后，ComfyUI 卡片（服务区域下方）有 **启动（Start）** / **停止（Stop）** 按钮：启动时弹出 GPU 选择器让你选择运行在哪张卡上，**打开 UI（Open UI）** 在新标签页中打开 Web 界面。
-- **LM Studio + Beledarian Suite** —— LM Studio 应用（任意 Linux 发行版）外加 Beledarian 工具箱（agentic AI 工具套件）。
+- **LM Studio + Beledarian Suite** —— LM Studio 应用（任意 Linux 发行版）外加 Beledarian 工具箱（agentic AI 工具套件）。LM Studio 卡片还有 **下载 LM Studio 模型（Download an LM Studio model）** 下拉菜单 —— 从精选的 GGUF 模型列表（Qwen 3.5/3.8、Gemma 4 等）中选择 Q4 量化版本，一键下载。
+- **Paiton（发布模型）** —— 以 Docker 容器方式运行任何 Paiton 发布模型：从下拉菜单中选择（Qwen3.8 27B、GPT-OSS 20B、MiniCPM5 2B、Ornith 1.5 35B、Qwen3-Coder 30B、Qwen3.8 NEO CODER MAX），安装器会拉取固定的 Paiton vLLM 镜像并启动服务器。需要 Docker 和 AMD GPU。
 
 每张卡片显示该工具是否已安装，并有一个小的 **Website（网站）** 链接，点击后在新标签页中打开项目官网，安装前可以先看看这个工具是什么。
 
@@ -219,3 +220,8 @@ LLM-Manager/
 ## License
 
 MIT —— 见 [LICENSE](LICENSE)。
+
+## 更新日志
+
+- 0.5.2 (2026-11-26)：模型下载器（vLLM + LM Studio，精选最新模型 Q4/4-bit 量化）、Paiton 发布模型安装器（任意模型，不仅 Qwen3.8）、恢复 fork-of 徽章。
+- 0.5.1 (2026-11-26)：ComfyUI 启动/停止 + GPU 选择器、Open UI 按钮、OpenViking + LM Studio 安装器、LLM 管理器更新器。
