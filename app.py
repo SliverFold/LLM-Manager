@@ -749,6 +749,109 @@ def restart_manager():
     except Exception as e:
         return jsonify({'success': False, 'message': f'Failed to restart manager: {e}'}), 500
 
+
+# --- LLM Manager self-updater (GitHub) ---
+REPO_DIR = Path(__file__).resolve().parent
+VERSION_FILE = REPO_DIR / 'VERSION'
+
+def _git(args, timeout=30):
+    """Run a git command in the repo dir. Returns (ok, output)."""
+    try:
+        r = subprocess.run(['git'] + args, cwd=str(REPO_DIR),
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode == 0, (r.stdout + r.stderr).strip()
+    except Exception as e:
+        return False, str(e)
+
+def _manager_version():
+    """Current manager version (repo VERSION file; default 0.5.0)."""
+    try:
+        return VERSION_FILE.read_text().strip() or '0.5.0'
+    except Exception:
+        return '0.5.0'
+
+def _bump_version():
+    """Bump the patch version in the VERSION file (0.5.0 -> 0.5.1)."""
+    parts = _manager_version().split('.')
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+    except ValueError:
+        return _manager_version()
+    new = '.'.join(parts)
+    try:
+        VERSION_FILE.write_text(new + '\n')
+    except Exception:
+        pass
+    return new
+
+@app.route('/api/manager/version')
+def manager_version():
+    """The manager version shown in the sidebar footer."""
+    return jsonify({'version': _manager_version()})
+
+@app.route('/api/updater/check')
+def updater_check():
+    """Compare the local checkout against origin/main on GitHub.
+
+    Returns the local commit, whether updates are available, the list of
+    new upstream commits (newest first), and a diffstat summary."""
+    ok, out = _git(['fetch', '--quiet', 'origin', 'main'], timeout=60)
+    if not ok:
+        return jsonify({'success': False, 'message': f'git fetch failed: {out[:300]}'}), 500
+    ok, local = _git(['rev-parse', 'HEAD'])
+    ok_remote, remote = _git(['rev-parse', 'origin/main'])
+    if not (ok and ok_remote):
+        return jsonify({'success': False, 'message': 'This is not a git checkout with a HEAD — run the updater from the repo clone.'}), 500
+    if local == remote:
+        return jsonify({'success': True, 'up_to_date': True, 'commit': local[:8], 'version': _manager_version()})
+    ok, commits = _git(['log', '--pretty=format:%h %s', 'HEAD..origin/main'])
+    ok, diffstat = _git(['diff', '--stat', 'HEAD..origin/main'])
+    ok, behind = _git(['rev-list', '--count', 'HEAD..origin/main'])
+    ok, ahead = _git(['rev-list', '--count', 'origin/main..HEAD'])
+    return jsonify({
+        'success': True,
+        'up_to_date': False,
+        'commit': local[:8],
+        'remote_commit': remote[:8],
+        'behind': int(behind or 0),
+        'ahead': int(ahead or 0),
+        'commits': commits.splitlines(),
+        'diffstat': diffstat.splitlines(),
+        'version': _manager_version(),
+    })
+
+@app.route('/api/updater/apply', methods=['POST'])
+def updater_apply():
+    """Apply updates: git pull --ff-only, rebuild + redeploy the frontend,
+    then restart the backend service (detached — it kills this process)."""
+    # Discard any local (uncommitted) version bump so the pull can't conflict
+    # with it; we re-bump after the pull.
+    _git(['checkout', '--', 'VERSION'])
+    ok, out = _git(['pull', '--ff-only', '--quiet', 'origin', 'main'], timeout=120)
+    if not ok:
+        return jsonify({'success': False, 'message': f'git pull failed (fast-forward only): {out[:300]}'}), 400
+    # Bump the patch version to mark this local update (0.5.0 -> 0.5.1 -> 0.5.2 ...).
+    version = _bump_version()
+    # Rebuild + redeploy the frontend (build.sh restarts the frontend service).
+    try:
+        r = subprocess.run(['bash', 'build.sh'], cwd=str(REPO_DIR / 'frontend'),
+                           capture_output=True, text=True, timeout=600)
+        build_out = (r.stdout + r.stderr).strip()
+    except Exception as e:
+        build_out = str(e)
+    # Restart the backend service so it loads the new code. Detached: the
+    # restart kills this process, so the response must already be on its way.
+    try:
+        subprocess.Popen(
+            ['systemctl', '--user', 'restart', 'vllm-manager-backend'],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+    return jsonify({'success': True, 'message': 'Update applied — the UI is reloading.', 'version': version, 'build': build_out[-500:]})
+
 def _resolve_log_file(service):
     """Resolve a service's log file, with loader-specific fallbacks.
     LM Studio (llmster daemon) writes rolling date logs to

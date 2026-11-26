@@ -7,8 +7,11 @@ import { SystemStats } from './system-stats';
 import { GPUSidebar } from './gpu-sidebar';
 import { LanguageToggle } from './language-toggle';
 import { Separator } from '@/components/ui/separator';
-import { Activity, Server, Bot, ExternalLink, RefreshCw, MessageSquare } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Activity, Server, ExternalLink, RefreshCw, MessageSquare, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useLang } from '@/lib/i18n';
+import { toast } from 'sonner';
 
 interface SystemSidebarProps {
   systemInfo: SystemInfo | undefined;
@@ -23,37 +26,7 @@ interface SystemSidebarProps {
 export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services, pollSeconds, onPollSecondsChange }: SystemSidebarProps) {
   const { t } = useLang();
 
-  // The Hermes Webapp signs each browser in with a one-use launch ticket (valid ~60s).
-  // Open the tab immediately (keeps the user-gesture context so the browser won't
-  // block it), then point it at the freshly-minted link from the backend.
-  const openHermes = async () => {
-    const win = window.open('about:blank', '_blank');
-    const fail = (msg: string) => {
-      if (win) {
-        win.document.title = t('sidebar.hermesFailTitle');
-        win.document.body.innerHTML =
-          '<div style="font-family:sans-serif;padding:2rem;max-width:40rem">' +
-          '<h2>' + t('sidebar.hermesFailH2') + '</h2><p>' + msg + '</p></div>';
-        win.focus();
-      } else {
-        alert(t('sidebar.hermesFailH2') + ': ' + msg);
-      }
-    };
-    try {
-      const res = await fetch(getApiUrl('/api/hermes/webapp-link'));
-      const data = await res.json();
-      if (data.success && data.url) {
-        if (win) win.location.href = data.url;
-        else window.open(data.url, '_blank');
-      } else {
-        fail(data.message || 'unknown error');
-      }
-    } catch (e: any) {
-      fail(e?.message || String(e));
-    }
-  };
-
-  // Open a model's chat in a Hermes Webapp tab (one-use launch ticket, like openHermes).
+  // Open a model's chat in a Hermes Webapp tab (one-use launch ticket).
   // Each model maps to a Hermes profile: lmstudio -> small-brain, big -> default.
   const openModelChat = async (key: string) => {
     const profile = key === 'lmstudio' ? 'small-brain' : '';
@@ -84,6 +57,69 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
   };
 
   const [restarting, setRestarting] = useState(false);
+
+  // Manager version for the footer (from the repo's VERSION file — the
+  // updater bumps it on each applied update: 0.5.0 -> 0.5.1 -> ...).
+  const [version, setVersion] = useState('0.5.0');
+  useEffect(() => {
+    fetch(getApiUrl('/api/manager/version'))
+      .then((r) => r.json())
+      .then((d) => { if (d && d.version) setVersion(d.version); })
+      .catch(() => {});
+  }, []);
+
+  // --- LLM Manager updater (check GitHub for updates) ---
+  interface UpdateCheck {
+    up_to_date: boolean;
+    commit: string;
+    remote_commit?: string;
+    behind?: number;
+    ahead?: number;
+    commits?: string[];
+    diffstat?: string[];
+  }
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+
+  const checkForUpdates = async () => {
+    setChecking(true);
+    try {
+      const res = await fetch(getApiUrl('/api/updater/check'));
+      const data: { success: boolean; message?: string } & UpdateCheck = await res.json();
+      if (data.success) {
+        setUpdateCheck(data);
+      } else {
+        toast.error(data.message || t('sidebar.checkFailed'));
+      }
+    } catch (e: any) {
+      toast.error(t('sidebar.checkFailed', { msg: e?.message || String(e) }));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const applyUpdate = async () => {
+    setUpdating(true);
+    try {
+      const res = await fetch(getApiUrl('/api/updater/apply'), { method: 'POST' });
+      const data: { success: boolean; message?: string } = await res.json();
+      if (data.success) {
+        toast.success(data.message || t('sidebar.updated'));
+        // The backend restarts itself (and the frontend was rebuilt) — the page
+        // reloads itself shortly; give the toast a moment to show.
+        setTimeout(() => window.location.reload(), 3000);
+      } else {
+        toast.error(data.message || t('sidebar.updateFailed'));
+      }
+    } catch (e: any) {
+      // The backend restarts itself mid-update, so a dropped response is expected —
+      // the page reload will confirm the result.
+      setTimeout(() => window.location.reload(), 3000);
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   // Live "last updated" time for the footer: the systemInfo object is replaced
   // on every successful poll (2s), so tracking it reflects when data actually
@@ -139,16 +175,16 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
           </h1>
         </div>
         <div className="ml-auto flex flex-col items-end gap-2">
-          <button
-            onClick={openHermes}
-            className="flex items-center gap-1.5 rounded-lg border border-sidebar-border bg-sidebar-accent/50 px-2.5 py-1.5 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
-            title={t('sidebar.hermesTitle')}
-          >
-          <Bot className="h-3.5 w-3.5 text-primary" />
-          Hermes
-          <ExternalLink className="h-3 w-3 opacity-60" />
-          </button>
           <LanguageToggle />
+          <button
+            onClick={checkForUpdates}
+            disabled={checking || updating}
+            className="flex items-center gap-1.5 rounded-lg border border-sidebar-border bg-sidebar-accent/50 px-2.5 py-1.5 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent transition-colors disabled:opacity-60"
+            title={t('sidebar.updaterTitle')}
+          >
+          <RefreshCw className={`h-3.5 w-3.5 text-primary ${checking ? 'animate-spin' : ''}`} />
+          {checking ? t('sidebar.checking') : t('sidebar.updater')}
+          </button>
         </div>
       </div>
 
@@ -229,9 +265,73 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
         </p>
         <p className="flex justify-between mt-1">
           <span>{t('sidebar.version')}</span>
-          <span className="text-foreground">0.5.0</span>
+          <span className="text-foreground">{version}</span>
         </p>
       </div>
+
+      {/* LLM Manager updater dialog */}
+      <Dialog open={updateCheck !== null} onOpenChange={(open) => { if (!open) setUpdateCheck(null); }}>
+        <DialogContent className="max-w-md bg-background/95 backdrop-blur-xl border-border shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display flex items-center gap-2">
+              {updateCheck?.up_to_date ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <RefreshCw className="h-4 w-4 text-primary" />
+              )}
+              {t('sidebar.updaterTitle')}
+            </DialogTitle>
+          </DialogHeader>
+          {updateCheck?.up_to_date ? (
+            <p className="mt-3 text-sm text-muted-foreground">
+              {t('sidebar.upToDate')} <span className="font-mono">({updateCheck.commit})</span>
+            </p>
+          ) : (
+            updateCheck && (
+              <div className="mt-3 space-y-3">
+                {(updateCheck.ahead ?? 0) > 0 && (
+                  <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400">
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    {t('sidebar.localAhead')}
+                  </div>
+                )}
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground mb-1">{t('sidebar.changes')}</div>
+                  <div className="bg-black/50 rounded-lg p-3 max-h-40 overflow-y-auto border border-border/50">
+                    <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">
+                      {updateCheck.commits?.join('\n') || '—'}
+                    </pre>
+                  </div>
+                </div>
+                {updateCheck.diffstat && updateCheck.diffstat.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-muted-foreground mb-1">{t('sidebar.filesChanged')}</div>
+                    <div className="bg-black/50 rounded-lg p-3 max-h-24 overflow-y-auto border border-border/50">
+                      <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap">
+                        {updateCheck.diffstat.join('\n')}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground font-mono">
+                    {updateCheck.commit} → {updateCheck.remote_commit}
+                  </span>
+                  <div className="ml-auto flex gap-2">
+                    <Button onClick={applyUpdate} disabled={updating || (updateCheck.ahead ?? 0) > 0}>
+                      <RefreshCw className={`h-3 w-3 mr-1 ${updating ? 'animate-spin' : ''}`} />
+                      {updating ? t('sidebar.updating') : t('sidebar.installUpdates')}
+                    </Button>
+                    <Button variant="outline" onClick={() => setUpdateCheck(null)}>
+                      {t('sidebar.decline')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
