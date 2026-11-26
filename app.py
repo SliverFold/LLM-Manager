@@ -15,7 +15,7 @@ import json
 import time
 import re
 import urllib.request
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 from loaders import all_loaders, get_loader
@@ -764,14 +764,24 @@ def _git(args, timeout=30):
         return False, str(e)
 
 def _manager_version():
-    """Current manager version (repo VERSION file; default 0.5.0)."""
+    """Current manager version (line 1 of the repo VERSION file; default 0.5.0)."""
     try:
-        return VERSION_FILE.read_text().strip() or '0.5.0'
+        lines = VERSION_FILE.read_text().strip().splitlines()
+        return (lines[0].strip() if lines else '') or '0.5.0'
     except Exception:
         return '0.5.0'
 
+def _manager_version_date():
+    """Date the current version was first pushed (line 2 of VERSION; '')."""
+    try:
+        lines = VERSION_FILE.read_text().strip().splitlines()
+        return lines[1].strip() if len(lines) > 1 else ''
+    except Exception:
+        return ''
+
 def _bump_version():
-    """Bump the patch version in the VERSION file (0.5.0 -> 0.5.1)."""
+    """Bump the patch version in the VERSION file (0.5.0 -> 0.5.1) and
+    stamp it with today's date (when this version first lands)."""
     parts = _manager_version().split('.')
     try:
         parts[-1] = str(int(parts[-1]) + 1)
@@ -779,15 +789,15 @@ def _bump_version():
         return _manager_version()
     new = '.'.join(parts)
     try:
-        VERSION_FILE.write_text(new + '\n')
+        VERSION_FILE.write_text(new + '\n' + date.today().isoformat() + '\n')
     except Exception:
         pass
     return new
 
 @app.route('/api/manager/version')
 def manager_version():
-    """The manager version shown in the sidebar footer."""
-    return jsonify({'version': _manager_version()})
+    """The manager version + date shown in the sidebar footer."""
+    return jsonify({'version': _manager_version(), 'date': _manager_version_date()})
 
 @app.route('/api/updater/check')
 def updater_check():

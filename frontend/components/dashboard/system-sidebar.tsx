@@ -60,11 +60,16 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
 
   // Manager version for the footer (from the repo's VERSION file — the
   // updater bumps it on each applied update: 0.5.0 -> 0.5.1 -> ...).
+  // The second line of the file is the date the version first landed.
   const [version, setVersion] = useState('0.5.0');
+  const [versionDate, setVersionDate] = useState('');
   useEffect(() => {
     fetch(getApiUrl('/api/manager/version'))
       .then((r) => r.json())
-      .then((d) => { if (d && d.version) setVersion(d.version); })
+      .then((d) => {
+        if (d && d.version) setVersion(d.version);
+        if (d && d.date) setVersionDate(d.date);
+      })
       .catch(() => {});
   }, []);
 
@@ -265,7 +270,9 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
         </p>
         <p className="flex justify-between mt-1">
           <span>{t('sidebar.version')}</span>
-          <span className="text-foreground">{version}</span>
+          <span className="text-foreground">
+            {version}{versionDate ? ` (${versionDate})` : ''}
+          </span>
         </p>
       </div>
 
