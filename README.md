@@ -35,9 +35,9 @@ That's it. `setup.sh` installs everything (Python environment, frontend, and the
 background services that keep the manager running) and finishes with a
 "ready" message. The manager starts automatically when your computer boots.
 
-**Requirements:** Python 3.8+, Node.js 18+, and a GPU (NVIDIA with CUDA or AMD
-with ROCm). You don't need anything installed yet — vLLM, Hermes, and ComfyUI
-can all be installed from the UI itself (see below).
+**Requirements:** a Linux machine with systemd, Python 3.8+, Node.js 18+,
+git, and a GPU (NVIDIA with CUDA or AMD with ROCm). Nothing else — vLLM,
+Hermes, and ComfyUI can all be installed from the UI itself (see below).
 
 ---
 
@@ -89,6 +89,11 @@ it the same way. Watch the live install log in a dialog while it runs.
 
 Anything with a start/stop script and a port works — the backends above get
 extra integration (model scanning, chat, etc.).
+
+> **Note:** the in-UI **Installers** section covers vLLM, Hermes, and
+> ComfyUI. Ollama, LM Studio, and llama.cpp are supported as backends but
+> installed separately (LM Studio is a downloadable app, Ollama is a single
+> command — see their websites).
 
 ---
 
