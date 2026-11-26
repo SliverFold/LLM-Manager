@@ -264,7 +264,7 @@ EOF
   log "Wrote $VENV/rocm.env (source it before running vllm)"
 else
   log "Installing vLLM (CUDA wheel, torch backend auto)…"
-  "$UV" pip install --python "$VENV" vllm --torch-backend=auto
+  "$UV" pip install --python "$VENV" vllm --torch-backend=auto --upgrade
 fi
 
 # --- 5.5. Paiton plugin (fast AMD kernels for quantized models: MXFP4/NVFP4) ---

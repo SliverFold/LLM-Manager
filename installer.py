@@ -310,14 +310,45 @@ def _job_worker(job_id, log_file, cmd):
                 job['detail'] = str(e)
 
 
-def start_job(kind, params):
-    """Start an install job. kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'. Returns (job_id, error)."""
+def _build_install_cmd(kind, params):
+    """Build the install/update command for a kind. Returns a cmd list, or None if unknown.
+
+    The install scripts are idempotent and vendor-aware, so the SAME command is
+    used for a fresh install and an in-place update:
+      vLLM     re-installs the latest vendor-correct wheels (ROCm from AMD's
+               indexes, CUDA from the NVIDIA wheel index) + vLLM.
+      Hermes   runs `hermes update` (or a fresh install) + enables the webapp.
+      ComfyUI  does `git pull` on the checkout + refreshes the venv deps.
+      LM Studio updates the Beledarian Suite (git pull) / installs the app.
+      OpenViking re-pips the packages (upgrade) + ensures the services.
+    """
+    if kind == 'vllm':
+        venv = os.path.expanduser(params.get('venv') or '~/vllm-venv')
+        channel = params.get('channel') or 'nightly'
+        paiton = 'true' if params.get('paiton') else 'false'
+        qwentools = 'true' if params.get('qwentools') else 'false'
+        return ['bash', str(SCRIPTS_DIR / 'install_vllm.sh'), venv, channel, paiton, qwentools]
+    elif kind == 'hermes':
+        return ['bash', str(SCRIPTS_DIR / 'install_hermes.sh')]
+    elif kind == 'comfyui':
+        dir = os.path.expanduser(params.get('dir') or '~/ComfyUI-plain')
+        return ['bash', str(SCRIPTS_DIR / 'install_comfyui.sh'), dir]
+    elif kind == 'lmstudio':
+        return ['bash', str(SCRIPTS_DIR / 'install_lmstudio.sh')]
+    elif kind == 'openviking':
+        return ['bash', str(SCRIPTS_DIR / 'install_openviking.sh')]
+    return None
+
+
+def _start_install_like_job(kind, params, operation):
+    """Start an install or update job. operation: 'install' | 'update'. Returns (job_id, error)."""
     with JOBS_LOCK:
         active = _ACTIVE.get(kind)
         if active and JOBS.get(active, {}).get('status') == 'running':
-            return None, f'{kind} install already running (job {active})'
-        job_id = f'{kind}-{int(time.time())}'
-        log_file = LOG_DIR / f'install_{kind}_{int(time.time())}.log'
+            return None, f'{kind} {operation} already running (job {active})'
+        ts = int(time.time())
+        job_id = f'{operation}-{kind}-{ts}'
+        log_file = LOG_DIR / f'{operation}_{kind}_{ts}.log'
         JOBS[job_id] = {
             'kind': kind,
             'status': 'running',
@@ -326,26 +357,29 @@ def start_job(kind, params):
         }
         _ACTIVE[kind] = job_id
     LOG_DIR.mkdir(exist_ok=True)
-    if kind == 'vllm':
-        venv = os.path.expanduser(params.get('venv') or '~/vllm-venv')
-        channel = params.get('channel') or 'nightly'
-        paiton = 'true' if params.get('paiton') else 'false'
-        qwentools = 'true' if params.get('qwentools') else 'false'
-        cmd = ['bash', str(SCRIPTS_DIR / 'install_vllm.sh'), venv, channel, paiton, qwentools]
-    elif kind == 'hermes':
-        cmd = ['bash', str(SCRIPTS_DIR / 'install_hermes.sh')]
-    elif kind == 'comfyui':
-        dir = os.path.expanduser(params.get('dir') or '~/ComfyUI-plain')
-        cmd = ['bash', str(SCRIPTS_DIR / 'install_comfyui.sh'), dir]
-    elif kind == 'lmstudio':
-        cmd = ['bash', str(SCRIPTS_DIR / 'install_lmstudio.sh')]
-    elif kind == 'openviking':
-        cmd = ['bash', str(SCRIPTS_DIR / 'install_openviking.sh')]
-    else:
+    cmd = _build_install_cmd(kind, params)
+    if cmd is None:
         return None, f'unknown kind: {kind}'
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
     t.start()
     return job_id, None
+
+
+def start_job(kind, params):
+    """Start an install job. kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'. Returns (job_id, error)."""
+    return _start_install_like_job(kind, params, 'install')
+
+
+def start_update_job(kind, params):
+    """Start an update job — re-runs the idempotent install script in place.
+    kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'. Returns (job_id, error).
+
+    vLLM is the important one: it re-resolves and reinstalls the latest
+    vendor-correct PyTorch wheels (ROCm from AMD's whl-next / whl-multi-arch
+    indexes, or the CUDA wheel from the NVIDIA index) plus the latest vLLM —
+    so an update always lands on a matching torch/vLLM pair.
+    """
+    return _start_install_like_job(kind, params, 'update')
 
 
 def start_uninstall_job(kind, params):

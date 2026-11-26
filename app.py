@@ -1742,6 +1742,25 @@ def install_openviking():
         return jsonify({'success': False, 'message': err}), 400
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
 
+@app.route('/api/installer/update', methods=['POST'])
+def update_tool():
+    """Start an update job — re-runs the idempotent install script in place.
+    Body: {kind: 'vllm'|'hermes'|'comfyui'|'lmstudio'|'openviking', venv?, channel?, dir?}.
+
+    vLLM re-resolves the latest vendor-correct PyTorch wheels (ROCm from AMD,
+    CUDA from NVIDIA) + the latest vLLM; Hermes runs `hermes update`; ComfyUI
+    does `git pull` + refreshes deps; LM Studio updates the Beledarian Suite;
+    OpenViking re-pips the packages.
+    """
+    body = request.get_json(silent=True) or {}
+    kind = body.get('kind')
+    if kind not in ('vllm', 'hermes', 'comfyui', 'lmstudio', 'openviking'):
+        return jsonify({'success': False, 'message': 'kind must be vllm, hermes, comfyui, lmstudio, or openviking'}), 400
+    job_id, err = installer.start_update_job(kind, body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 400
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
 @app.route('/api/installer/uninstall', methods=['POST'])
 def uninstall():
     """Start an uninstall job. Body: {kind: 'vllm'|'hermes'|'comfyui'|'lmstudio'|'openviking', venv?, remove_venv?, dir?, remove_checkout?, remove_workspace?}.

@@ -103,11 +103,12 @@ export function InstallerSection() {
   const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
   const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
+  const [updating, setUpdating] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [removeVenv, setRemoveVenv] = useState(false);
   const [removeCheckout, setRemoveCheckout] = useState(false);
   const [removeWorkspace, setRemoveWorkspace] = useState(false);
   const [logJob, setLogJob] = useState<string | null>(null);
-  const [logJobType, setLogJobType] = useState<'install' | 'uninstall'>('install');
+  const [logJobType, setLogJobType] = useState<'install' | 'uninstall' | 'update'>('install');
   const [logText, setLogText] = useState('');
   const [logStatus, setLogStatus] = useState('running');
   const [restartingGateway, setRestartingGateway] = useState(false);
@@ -157,13 +158,12 @@ export function InstallerSection() {
           if (data.status !== 'running') {
             setInstalling(null);
             setUninstalling(null);
+            setUpdating(null);
             setLogJob(null);
             const done = data.status === 'done';
-            toast.success(
-              done
-                ? (logJobType === 'uninstall' ? t('inst.uninstallDone') : t('inst.installDone'))
-                : (logJobType === 'uninstall' ? t('inst.uninstallFailed') : t('inst.installFailed'))
-            );
+            const okKey = logJobType === 'uninstall' ? 'inst.uninstallDone' : logJobType === 'update' ? 'inst.updateDone' : 'inst.installDone';
+            const failKey = logJobType === 'uninstall' ? 'inst.uninstallFailed' : logJobType === 'update' ? 'inst.updateFailed' : 'inst.installFailed';
+            toast.success(done ? t(okKey) : t(failKey));
           }
         }
       } catch {
@@ -253,6 +253,40 @@ export function InstallerSection() {
       }
     },
     [venv, removeVenv, comfyDir, removeCheckout, removeWorkspace, t]
+  );
+
+  // Update = re-run the idempotent install script in place. For vLLM this
+  // re-resolves the latest vendor-correct PyTorch wheels (ROCm from AMD,
+  // CUDA from NVIDIA) + the latest vLLM; the others do a quick refresh.
+  const startUpdate = useCallback(
+    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking') => {
+      if (kind === 'vllm') {
+        if (!window.confirm(t('inst.vllmUpdateConfirm', { venv: venv }))) return;
+      }
+      setUpdating(kind);
+      try {
+        const body = kind === 'vllm' ? { kind, venv, channel } : kind === 'comfyui' ? { kind, dir: comfyDir } : { kind };
+        const res = await fetch(getApiUrl('/api/installer/update'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('update');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.updateStartFailed'));
+          setUpdating(null);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.updateStartFailed', { msg: e?.message || String(e) }));
+        setUpdating(null);
+      }
+    },
+    [venv, channel, comfyDir, t]
   );
 
   const restartGateway = async () => {
@@ -425,12 +459,18 @@ export function InstallerSection() {
 
           <div className="space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null}>
+              <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null || updating !== null}>
                 <Download className="h-3 w-3 mr-1" />
                 {installing === 'vllm' ? t('inst.installing') : t('inst.install')}
               </Button>
               {vllm?.installed && (
-                <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null}>
+                <Button variant="outline" onClick={() => startUpdate('vllm')} disabled={updating !== null || installing !== null || uninstalling !== null}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'vllm' ? 'animate-spin' : ''}`} />
+                  {updating === 'vllm' ? t('inst.updating') : t('inst.update')}
+                </Button>
+              )}
+              {vllm?.installed && (
+                <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null || updating !== null}>
                   <Trash2 className="h-3 w-3 mr-1" />
                   {uninstalling === 'vllm' ? t('inst.uninstalling') : t('inst.uninstall')}
                 </Button>
@@ -483,12 +523,18 @@ export function InstallerSection() {
         >
           <CardDescription>{t('inst.lmsDesc')}</CardDescription>
           <div className="flex items-center gap-2 flex-wrap">
-            <Button onClick={() => startInstall('lmstudio')} disabled={installing !== null || uninstalling !== null}>
+            <Button onClick={() => startInstall('lmstudio')} disabled={installing !== null || uninstalling !== null || updating !== null}>
               <Download className="h-3 w-3 mr-1" />
               {installing === 'lmstudio' ? t('inst.installing') : t('inst.install')}
             </Button>
             {lms?.installed && (
-              <Button variant="destructive" onClick={() => startUninstall('lmstudio')} disabled={uninstalling !== null || installing !== null}>
+              <Button variant="outline" onClick={() => startUpdate('lmstudio')} disabled={updating !== null || installing !== null || uninstalling !== null}>
+                <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'lmstudio' ? 'animate-spin' : ''}`} />
+                {updating === 'lmstudio' ? t('inst.updating') : t('inst.update')}
+              </Button>
+            )}
+            {lms?.installed && (
+              <Button variant="destructive" onClick={() => startUninstall('lmstudio')} disabled={uninstalling !== null || installing !== null || updating !== null}>
                 <Trash2 className="h-3 w-3 mr-1" />
                 {uninstalling === 'lmstudio' ? t('inst.uninstalling') : t('inst.uninstall')}
               </Button>
@@ -532,10 +578,16 @@ export function InstallerSection() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => startInstall('hermes')} disabled={installing !== null}>
+              <Button onClick={() => startInstall('hermes')} disabled={installing !== null || updating !== null}>
                 <Download className="h-3 w-3 mr-1" />
                 {installing === 'hermes' ? t('inst.installing') : t('inst.install')}
               </Button>
+              {hermes?.installed && (
+                <Button variant="outline" onClick={() => startUpdate('hermes')} disabled={updating !== null || installing !== null || uninstalling !== null}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'hermes' ? 'animate-spin' : ''}`} />
+                  {updating === 'hermes' ? t('inst.updating') : t('inst.update')}
+                </Button>
+              )}
               {hermes?.installed && (
                 <Button variant="outline" onClick={restartGateway} disabled={restartingGateway}>
                   <RefreshCw className={`h-3 w-3 mr-1 ${restartingGateway ? 'animate-spin' : ''}`} />
@@ -543,7 +595,7 @@ export function InstallerSection() {
                 </Button>
               )}
               {hermes?.installed && hermes.webapp_enabled === true && (
-                <Button variant="outline" onClick={() => startUninstall('hermes')} disabled={uninstalling !== null || installing !== null}>
+                <Button variant="outline" onClick={() => startUninstall('hermes')} disabled={uninstalling !== null || installing !== null || updating !== null}>
                   <XCircle className="h-3 w-3 mr-1" />
                   {uninstalling === 'hermes' ? t('inst.uninstalling') : t('inst.disableWebapp')}
                 </Button>
@@ -600,12 +652,18 @@ export function InstallerSection() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => startInstall('openviking')} disabled={installing !== null || uninstalling !== null}>
+              <Button onClick={() => startInstall('openviking')} disabled={installing !== null || uninstalling !== null || updating !== null}>
                 <Download className="h-3 w-3 mr-1" />
                 {installing === 'openviking' ? t('inst.installing') : t('inst.install')}
               </Button>
               {ov?.installed && (
-                <Button variant="destructive" onClick={() => startUninstall('openviking')} disabled={uninstalling !== null || installing !== null}>
+                <Button variant="outline" onClick={() => startUpdate('openviking')} disabled={updating !== null || installing !== null || uninstalling !== null}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'openviking' ? 'animate-spin' : ''}`} />
+                  {updating === 'openviking' ? t('inst.updating') : t('inst.update')}
+                </Button>
+              )}
+              {ov?.installed && (
+                <Button variant="destructive" onClick={() => startUninstall('openviking')} disabled={uninstalling !== null || installing !== null || updating !== null}>
                   <Trash2 className="h-3 w-3 mr-1" />
                   {uninstalling === 'openviking' ? t('inst.uninstalling') : t('inst.uninstall')}
                 </Button>
@@ -660,12 +718,18 @@ export function InstallerSection() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => startInstall('comfyui')} disabled={installing !== null || uninstalling !== null}>
+              <Button onClick={() => startInstall('comfyui')} disabled={installing !== null || uninstalling !== null || updating !== null}>
                 <Download className="h-3 w-3 mr-1" />
                 {installing === 'comfyui' ? t('inst.installing') : t('inst.install')}
               </Button>
               {comfyui?.installed && (
-                <Button variant="destructive" onClick={() => startUninstall('comfyui')} disabled={uninstalling !== null || installing !== null}>
+                <Button variant="outline" onClick={() => startUpdate('comfyui')} disabled={updating !== null || installing !== null || uninstalling !== null}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'comfyui' ? 'animate-spin' : ''}`} />
+                  {updating === 'comfyui' ? t('inst.updating') : t('inst.update')}
+                </Button>
+              )}
+              {comfyui?.installed && (
+                <Button variant="destructive" onClick={() => startUninstall('comfyui')} disabled={uninstalling !== null || installing !== null || updating !== null}>
                   <Trash2 className="h-3 w-3 mr-1" />
                   {uninstalling === 'comfyui' ? t('inst.uninstalling') : t('inst.uninstall')}
                 </Button>
