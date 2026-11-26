@@ -210,6 +210,11 @@ LLM-Manager/
 Issues and pull requests are welcome — see
 [Issues](https://github.com/SliverFold/LLM-Manager/issues).
 
+## Acknowledgments
+
+This project is a fork of [vllm-model-manager](https://github.com/shihaohou/vllm-model-manager-)
+by [Hou Shihao](https://github.com/shihaohou) — thanks for the original work.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
