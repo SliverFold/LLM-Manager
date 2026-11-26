@@ -27,6 +27,8 @@ VLLM_MODELS = [
     {'slug': 'gemma4-12b',       'name': 'Gemma 4 12B (W4A16)',   'repo': 'google/gemma-4-12B-it-qat-w4a16-ct', 'size': '~8 GB',  'vram': None},
     {'slug': 'gemma4-26b-a4b',   'name': 'Gemma 4 26B-A4B (MoE, NVFP4)', 'repo': 'nvidia/Gemma-4-26B-A4B-NVFP4', 'size': '~16 GB', 'vram': None},
     {'slug': 'gemma4-31b',       'name': 'Gemma 4 31B (NVFP4)',   'repo': 'nvidia/Gemma-4-31B-IT-NVFP4',      'size': '~20 GB',  'vram': None},
+    {'slug': 'ive-4b',           'name': 'IVE-4B (BF16)',         'repo': 'illuin/IVE-4B',                  'size': '~4.5 GB', 'vram': None},
+    {'slug': 'ivonnet-0.8b',     'name': 'Ivonnet-0.8B (BF16)',   'repo': 'illuin/Ivonnet-0.8B',            'size': '~0.9 GB', 'vram': None},
 ]
 
 # LM Studio models (GGUF). The Qwen3.8-27B family has 16/24/32 GB versions.
@@ -41,4 +43,7 @@ LMSTUDIO_MODELS = [
     {'slug': 'gemma4-12b',       'name': 'Gemma 4 12B (Q4_0)',           'repo': 'google/gemma-4-12B-it-qat-q4_0-gguf', 'file': 'gemma-4-12b-it-qat-q4_0.gguf',  'size': '~8 GB',    'vram': None},
     {'slug': 'gemma4-26b-a4b',   'name': 'Gemma 4 26B-A4B (MoE, Q4_0)', 'repo': 'google/gemma-4-26B-A4B-it-qat-q4_0-gguf', 'file': 'gemma-4-26B_q4_0-it.gguf',  'size': '~16 GB',   'vram': None},
     {'slug': 'gemma4-31b',       'name': 'Gemma 4 31B (Q4_0)',           'repo': 'google/gemma-4-31B-it-qat-q4_0-gguf', 'file': 'gemma-4-31B_q4_0-it.gguf',     'size': '~20 GB',   'vram': None},
+    {'slug': 'ive-4b',           'name': 'IVE-4B (Q4_K_M)',             'repo': 'Hansda/IVE-4B-GGUF',              'file': 'IVE-4B-Q4_K_M.gguf',              'size': '~2.2 GB',  'vram': None},
+    {'slug': 'ivonnet-0.8b',     'name': 'Ivonnet-0.8B (Q4_K_M)',        'repo': 'Hansda/Ivonnet-0.8B-GGUF',        'file': 'Ivonnet-0.8B-Q4_K_M.gguf',        'size': '~0.4 GB',  'vram': None},
+    {'slug': 'inkling2-mini',    'name': 'Inkling 2 Mini (Q4_K_M)',      'repo': 'unsloth/Inkling-2-Mini-GGUF',     'file': 'Inkling-2-Mini-UD-Q4_K_M.gguf',   'size': '~13 GB',   'vram': None},
 ]
