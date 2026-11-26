@@ -102,7 +102,6 @@ export function InstallerSection() {
   const [status, setStatus] = useState<InstallerStatus | null>(null);
   const [venv, setVenv] = useState('~/vllm-venv');
   const [channel, setChannel] = useState<'nightly' | 'stable'>('nightly');
-  const [paiton, setPaiton] = useState(false);
   const [qwenTools, setQwenTools] = useState(false);
   const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
   const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
@@ -190,7 +189,7 @@ export function InstallerSection() {
 
   const startInstall = useCallback(
     async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking') => {
-      const body = kind === 'vllm' ? { venv, channel, paiton, qwentools: qwenTools } : kind === 'comfyui' ? { dir: comfyDir } : {};
+      const body = kind === 'vllm' ? { venv, channel, qwentools: qwenTools } : kind === 'comfyui' ? { dir: comfyDir } : {};
       setInstalling(kind);
       try {
         const res = await fetch(getApiUrl(`/api/installer/${kind}`), {
@@ -213,7 +212,7 @@ export function InstallerSection() {
         setInstalling(null);
       }
     },
-    [venv, channel, paiton, qwenTools, comfyDir, t]
+    [venv, channel, qwenTools, comfyDir, t]
   );
 
   const startUninstall = useCallback(
@@ -271,7 +270,7 @@ export function InstallerSection() {
       setUpdating(kind);
       try {
         const body = kind === 'vllm'
-          ? { kind, venv, channel, paiton: !!status?.paiton?.installed, qwentools: !!status?.qwen?.installed }
+          ? { kind, venv, channel, qwentools: !!status?.qwen?.installed }
           : kind === 'comfyui' ? { kind, dir: comfyDir } : { kind };
         const res = await fetch(getApiUrl('/api/installer/update'), {
           method: 'POST',
@@ -376,7 +375,6 @@ export function InstallerSection() {
   const docker = status?.docker;
   const paitonDocker = status?.paiton_docker;
   const vllm = status?.vllm;
-  const paitonStatus = status?.paiton;
   const qwenStatus = status?.qwen;
   const hermes = status?.hermes;
   const comfyui = status?.comfyui;
@@ -473,27 +471,6 @@ export function InstallerSection() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">{t('inst.channelNote')}</p>
-            {sys?.vendor === 'amd' && (
-              paitonStatus?.installed ? (
-                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                  <CheckCircle2 className="mr-1 h-3 w-3" />
-                  {t('inst.paiton')} {paitonStatus.version || ''}
-                </Badge>
-              ) : (
-                <label className="flex items-start gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={paiton}
-                    onChange={(e) => setPaiton(e.target.checked)}
-                    className="h-3 w-3 rounded border-input mt-0.5"
-                  />
-                  <span>
-                    {t('inst.paiton')}
-                    <span className="block text-muted-foreground/70">{t('inst.paitonHint')}</span>
-                  </span>
-                </label>
-              )
-            )}
             {qwenStatus?.installed ? (
               <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                 <CheckCircle2 className="mr-1 h-3 w-3" />
