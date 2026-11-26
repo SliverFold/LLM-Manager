@@ -10,6 +10,7 @@ terminal required.
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)]()
 [![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Fork of](https://img.shields.io/badge/fork%20of-shihaohou%2Fvllm-model-manager-brightgreen)](https://github.com/shihaohou/vllm-model-manager-)
 
 </div>
 
