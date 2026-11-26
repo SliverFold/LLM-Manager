@@ -1,9 +1,10 @@
 """LM Studio loader — lms CLI (server on :45987 by default)."""
+import json
 import os
 import re
 import time
 import shutil
-from .base import Loader, _run, write_scripts, which
+from .base import Loader, _run, expand, load_platform_config, write_scripts, which
 
 
 class LMStudioLoader(Loader):
@@ -13,6 +14,7 @@ class LMStudioLoader(Loader):
     fixed_port = 45987
     param_schema = [
         {'name': 'context_length', 'label': 'Max Context Length (tokens)', 'type': 'int', 'default': 102400, 'min': 256, 'max': 262144},
+        {'name': 'kv_cache_quant', 'label': 'KV Cache Quantization', 'type': 'select', 'default': 'q8_0', 'options': ['q8_0', 'q5_1', 'q5_0', 'q4_1', 'iq4_nl', 'q4_0', 'f16']},
     ]
 
     def detect(self):
@@ -74,8 +76,26 @@ class LMStudioLoader(Loader):
         log_file = f'/home/{os.getlogin()}/logs/lmstudio.log'
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         ctx = int(params.get('context_length') or 102400)
+        kv = params.get('kv_cache_quant') or 'q8_0'
+        # Generate the LM Studio engine config file (KV cache quantization type for
+        # the llama.cpp engine). The format matches LM Studio's own per-model default
+        # configs (~/.lmstudio/.internal/user-concrete-model-default-config/...).
+        # Flash Attention must be on for V-cache quantization.
+        kv_fields = [
+            {'key': 'llm.load.llama.kCacheQuantizationType', 'value': {'checked': True, 'value': kv}},
+            {'key': 'llm.load.llama.vCacheQuantizationType', 'value': {'checked': True, 'value': kv}},
+        ]
+        if kv != 'f16':
+            kv_fields.append({'key': 'llm.load.llama.flashAttention', 'value': True})
+        kv_config = {'preset': '', 'operation': {'fields': []}, 'load': {'fields': kv_fields}}
+        cfg = load_platform_config()
+        scripts_dir = expand(cfg.get('generated_scripts_dir', '~/Desktop/AI/vllm-model-manager-/scripts/generated'))
+        os.makedirs(scripts_dir, exist_ok=True)
+        kv_config_path = os.path.join(scripts_dir, f'mgr_{key}_kv.json')
+        with open(kv_config_path, 'w') as f:
+            json.dump(kv_config, f, indent=2)
         # If a model is specified, load it after the server starts.
-        load_cmd = f'lms load "{model}" --context-length {ctx} 2>&1 || echo "Model load failed"\n' if model else ''
+        load_cmd = f'lms load "{model}" --context-length {ctx} --engine-config-file {kv_config_path} 2>&1 || echo "Model load failed"\n' if model else ''
         # Start the headless daemon, server, and load the model.
         start = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -122,6 +142,6 @@ echo "LM Studio stopped (server + daemon + backend)"
             'log_file': log_file,
             'loader': self.key,
             'generated': True,
-            'default_params': {'gpus': params.get('gpus') or [], 'port': port, 'context_length': ctx},
+            'default_params': {'gpus': params.get('gpus') or [], 'port': port, 'context_length': ctx, 'kv_cache_quant': kv},
         }
         return {'service': service, 'start_script': start_path, 'stop_script': stop_path}
