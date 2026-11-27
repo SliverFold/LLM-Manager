@@ -52,15 +52,16 @@ interface InstallerStatus {
 
 // The Paiton release models available in the paiton-vllm-plugin repo. The slug
 // is passed to the backend's install_paiton.sh; the name is the dropdown label.
+// `bits` is the served quantization (so users know the precision they get);
 // `size` is the total download estimate (image + weights, which are a separate
 // download — the docker image does NOT bundle the weights).
 const PAITON_MODELS = [
-  { slug: 'qwen38', name: 'Qwen3.8 27B', size: '~66 GB' },
-  { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B', size: '~44 GB' },
-  { slug: 'minicpm5-2b', name: 'MiniCPM5 2B', size: '~40 GB' },
-  { slug: 'ornith-1.5', name: 'Ornith 1.5 35B', size: '~28 GB' },
-  { slug: 'qwen3-coder-30b', name: 'Qwen3-Coder 30B', size: '~30 GB' },
-  { slug: 'qwen38-neo-coder', name: 'Qwen3.8 NEO CODER MAX', size: '~25 GB' },
+  { slug: 'qwen38', name: 'Qwen3.8 27B', bits: '3-bit W3A4 + FP8 draft', size: '~66 GB' },
+  { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B', bits: 'MXFP4 (4-bit)', size: '~44 GB' },
+  { slug: 'minicpm5-2b', name: 'MiniCPM5 2B', bits: 'W4A16 (4-bit)', size: '~40 GB' },
+  { slug: 'ornith-1.5', name: 'Ornith 1.5 35B', bits: 'MXFP4 (4-bit)', size: '~28 GB' },
+  { slug: 'qwen3-coder-30b', name: 'Qwen3-Coder 30B', bits: 'INT4 (4-bit)', size: '~30 GB' },
+  { slug: 'qwen38-neo-coder', name: 'Qwen3.8 NEO CODER MAX', bits: 'Q4_K_M (4-bit)', size: '~25 GB' },
 ];
 
 // A collapsible installer card: the header (icon + title + status badge +
@@ -709,10 +710,10 @@ export function InstallerSection() {
             <select
               value={paitonModel}
               onChange={(e) => setPaitonModel(e.target.value)}
-              className="w-[220px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="w-[380px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               {PAITON_MODELS.map((m) => (
-                <option key={m.slug} value={m.slug}>{m.name}</option>
+                <option key={m.slug} value={m.slug}>{m.name} — {m.bits} · {m.size}</option>
               ))}
             </select>
             <Button
