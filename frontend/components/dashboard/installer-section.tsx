@@ -57,6 +57,7 @@ interface InstallerStatus {
 // download — the docker image does NOT bundle the weights).
 const PAITON_MODELS = [
   { slug: 'qwen38', name: 'Qwen3.8 27B', bits: '3-bit W3A4 + FP8 draft', size: '~66 GB' },
+  { slug: 'qwen38-mxfp4', name: 'Qwen3.8 27B (MXFP4)', bits: 'MXFP4 (4-bit)', size: '~62 GB' },
   { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B', bits: 'MXFP4 (4-bit)', size: '~44 GB' },
   { slug: 'minicpm5-2b', name: 'MiniCPM5 2B', bits: 'W4A16 (4-bit)', size: '~40 GB' },
   { slug: 'ornith-1.5', name: 'Ornith 1.5 35B', bits: 'MXFP4 (4-bit)', size: '~28 GB' },

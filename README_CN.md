@@ -72,7 +72,7 @@ cd LLM-Manager
 - **OpenViking —— Hermes 记忆** —— Hermes 的长期记忆：OpenViking 服务器（端口 1934）、CPU 嵌入服务（bge-small-en-v1.5 GGUF 经 llama.cpp，端口 8091，零 VRAM）、Hermes 记忆插件以及 Hermes 记忆配置。全部以 systemd 用户服务运行，自动重启。
 - **ComfyUI** —— AI 图像/视频生成框架。安装后，ComfyUI 卡片（服务区域下方）有 **启动（Start）** / **停止（Stop）** 按钮：启动时弹出 GPU 选择器让你选择运行在哪张卡上，**打开 UI（Open UI）** 在新标签页中打开 Web 界面。
 - **LM Studio + Beledarian Suite** —— LM Studio 应用（任意 Linux 发行版）外加 Beledarian 工具箱（agentic AI 工具套件）。LM Studio 卡片还有 **下载 LM Studio 模型（Download an LM Studio model）** 下拉菜单 —— 从精选的 GGUF 模型列表（Qwen 3.5/3.8、Gemma 4 等）中选择 Q4 量化版本，一键下载。
-- **Paiton（发布模型）** —— 以 Docker 容器方式运行任何 Paiton 发布模型：从下拉菜单中选择（Qwen3.8 27B、GPT-OSS 20B、MiniCPM5 2B、Ornith 1.5 35B、Qwen3-Coder 30B、Qwen3.8 NEO CODER MAX），安装器会拉取固定的 Paiton vLLM 镜像并启动服务器。需要 Docker 和 AMD GPU。
+- **Paiton（发布模型）** —— 以 Docker 容器方式运行任何 Paiton 发布模型：从下拉菜单中选择（Qwen3.8 27B（3-bit W3A4 或 MXFP4）、GPT-OSS 20B、MiniCPM5 2B、Ornith 1.5 35B、Qwen3-Coder 30B、Qwen3.8 NEO CODER MAX），安装器会拉取固定的 Paiton vLLM 镜像并启动服务器。需要 Docker 和 AMD GPU。
 
 每张卡片显示该工具是否已安装，并有一个小的 **Website（网站）** 链接，点击后在新标签页中打开项目官网，安装前可以先看看这个工具是什么。
 

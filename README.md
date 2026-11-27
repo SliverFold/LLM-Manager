@@ -113,10 +113,10 @@ The **Installers** section at the bottom of the page installs:
   curated list of GGUF models (Qwen 3.5/3.8, Gemma 4, and more) in Q4
   quantizations and download them with one click.
 - **Paiton (release models)** — serves any Paiton release model as a Docker
-  container: pick from a dropdown (Qwen3.8 27B, GPT-OSS 20B, MiniCPM5 2B,
-  Ornith 1.5 35B, Qwen3-Coder 30B, Qwen3.8 NEO CODER MAX), and the installer
-  pulls the pinned Paiton vLLM image and starts the server. Requires Docker
-  and an AMD GPU.
+  container: pick from a dropdown (Qwen3.8 27B in 3-bit W3A4 or MXFP4, GPT-OSS
+  20B, MiniCPM5 2B, Ornith 1.5 35B, Qwen3-Coder 30B, Qwen3.8 NEO CODER MAX), and
+  the installer pulls the pinned Paiton vLLM image and starts the server.
+  Requires Docker and an AMD GPU.
 
 Each card shows whether the tool is already installed, and a small
 **Website** link opens the project's site in a new tab so you can see what

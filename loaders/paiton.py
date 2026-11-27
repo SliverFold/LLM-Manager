@@ -32,6 +32,24 @@ PAITON_MODELS = {
         'launcher': 'run-3bit.sh',
         'type': 'flags',
         'gpus': 1,
+        'weights': {
+            'PAITON_TARGET_DIR': 'model-cache/qwen38-nvfp4',
+            'PAITON_DRAFT_DIR': 'model-cache/qwen38-dflash2',
+            'PAITON_W3ROT_DIR': 'model-cache/qwen38-w3rot-int3',
+            'PAITON_CACHE_DIR': 'runtime-cache/qwen38-rocm10-20261107',
+        },
+    },
+    'Qwen3.8 27B (MXFP4)': {
+        'slug': 'qwen38-mxfp4',
+        'dir': 'Qwen3.8-MXFP4-DFlash2',
+        'launcher': 'run-mxfp4.sh',
+        'type': 'flags',
+        'gpus': 1,
+        'weights': {
+            'PAITON_TARGET_DIR': 'model-cache/qwen38-mxfp4',
+            'PAITON_DRAFT_DIR': 'model-cache/qwen38-dflash2',
+            'PAITON_CACHE_DIR': 'runtime-cache/qwen38-rocm10-20261107',
+        },
     },
     'GPT-OSS 20B': {
         'slug': 'gpt-oss-20b',
@@ -134,14 +152,16 @@ class PaitonLoader(Loader):
 
         if cfg['type'] == 'flags':
             # Qwen3.8: the launcher needs the PAITON_* checkpoint/cache dirs set,
-            # and takes --name/--port flags (run-3bit.sh -> launch-rocm10.py --detach).
+            # and takes --name/--port flags (run-*.sh -> launch-rocm10.py --detach).
+            # Weights env vars come from the catalog entry (3-bit and MXFP4 use
+            # different targets; only 3-bit needs the W3 rotation dir).
+            weights_lines = ''.join(
+                f'export {var}="$ROOT/{path}"\n' for var, path in cfg.get('weights', {}).items()
+            )
             start = f"""#!/usr/bin/env bash
 set -euo pipefail
 ROOT="{repo}"
-export PAITON_TARGET_DIR="$ROOT/model-cache/qwen38-nvfp4"
-export PAITON_DRAFT_DIR="$ROOT/model-cache/qwen38-dflash2"
-export PAITON_W3ROT_DIR="$ROOT/model-cache/qwen38-w3rot-int3"
-export PAITON_CACHE_DIR="$ROOT/runtime-cache/qwen38-rocm10-20261107"
+{weights_lines}
 LOG="{log_file}"
 mkdir -p "$(dirname "$LOG")"
 docker rm -f {container} 2>/dev/null || true
