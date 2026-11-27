@@ -483,6 +483,32 @@ def start_paiton_job(params):
     return job_id, None
 
 
+def start_paiton_download_job(params):
+    """Start a Paiton weight-download job for the chosen model (pull image + download
+    weights, NO container start). params: {model?: slug}. Returns (job_id, error)."""
+    model = params.get('model') or 'qwen38'
+    with JOBS_LOCK:
+        active = _ACTIVE.get('paiton_download')
+        if active and JOBS.get(active, {}).get('status') == 'running':
+            return None, f'paiton download already running (job {active})'
+        ts = int(time.time())
+        job_id = f'paiton-download-{ts}'
+        log_file = LOG_DIR / f'paiton_download_{ts}.log'
+        JOBS[job_id] = {
+            'kind': 'paiton_download',
+            'status': 'running',
+            'log_file': str(log_file),
+            'started_at': datetime.now().isoformat(),
+            'model': model,
+        }
+        _ACTIVE['paiton_download'] = job_id
+    LOG_DIR.mkdir(exist_ok=True)
+    cmd = ['bash', str(SCRIPTS_DIR / 'install_paiton.sh'), model, '', '--download-only']
+    t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
+    t.start()
+    return job_id, None
+
+
 def start_uninstall_job(kind, params):
     """Start an uninstall job. kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'. Returns (job_id, error).
 

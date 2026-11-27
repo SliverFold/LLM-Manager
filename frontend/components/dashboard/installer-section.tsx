@@ -121,6 +121,7 @@ export function InstallerSection() {
   const [comfyDir, setComfyDir] = useState('~/ComfyUI-plain');
   const [installing, setInstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
   const [paitonInstalling, setPaitonInstalling] = useState(false);
+  const [paitonDownloading, setPaitonDownloading] = useState(false);
   const [paitonModel, setPaitonModel] = useState('qwen38');
   // Model downloaders (vLLM + LM Studio)
   const [vllmModels, setVllmModels] = useState<{ slug: string; name: string; size: string; vram?: number | null }[]>([]);
@@ -374,6 +375,39 @@ export function InstallerSection() {
       } catch (e: any) {
         toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
         setPaitonInstalling(false);
+      }
+    },
+    [status, t, paitonModel]
+  );
+
+  const startPaitonDownload = useCallback(
+    async () => {
+      const dockerOk = status?.docker?.installed && status?.docker?.running;
+      if (!dockerOk) {
+        toast.error(t('inst.paitonNoDocker'));
+        return;
+      }
+      if (!window.confirm(t('inst.paitonDownloadConfirm'))) return;
+      setPaitonDownloading(true);
+      try {
+        const res = await fetch(getApiUrl('/api/installer/paiton-download'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: paitonModel }),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setPaitonDownloading(false);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setPaitonDownloading(false);
       }
     },
     [status, t, paitonModel]
@@ -723,6 +757,14 @@ export function InstallerSection() {
             >
               {paitonDocker?.installed ? <RefreshCw className={`h-3 w-3 mr-1 ${paitonInstalling ? 'animate-spin' : ''}`} /> : <Download className="h-3 w-3 mr-1" />}
               {paitonInstalling ? t('inst.paitonInstalling') : paitonDocker?.installed ? t('inst.paitonUpdate') : t('inst.paitonInstall')}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={startPaitonDownload}
+              disabled={paitonDownloading || paitonInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}
+            >
+              <Download className={`h-3 w-3 mr-1 ${paitonDownloading ? 'animate-pulse' : ''}`} />
+              {t('inst.download')}
             </Button>
             {paitonDocker?.running && (
               <span className="text-xs text-muted-foreground font-mono truncate">{paitonDocker.detail}</span>

@@ -13,15 +13,18 @@
 # container. Qwen3.8 weights are reused (hf download is a no-op when the
 # revision is already present).
 #
-# Usage: install_paiton.sh <model-slug> [port]
+# Usage: install_paiton.sh <model-slug> [port] [--download-only]
 #   model-slug: qwen38 | qwen38-mxfp4 | gpt-oss-20b | minicpm5-2b | ornith-1.5 |
 #               qwen3-coder-30b | qwen38-neo-coder
 #   port:       host port for the API (default per model)
+#   --download-only: pull the image + download the weights for the model, but do
+#               NOT start the container (for pre-downloading).
 set -euo pipefail
 log() { echo "[$(date '+%Y-%d %H:%M:%S')] $*"; }
 
 MODEL="${1:-qwen38}"
 PORT="${2:-}"
+DOWNLOAD_ONLY="${3:-}"
 
 # --- Per-model config ---
 case "$MODEL" in
@@ -98,17 +101,13 @@ log "Image ready"
 GPU_INDEX="${PAITON_GPU:-0}"
 ROCR_DEV="$(rocm-smi --showuniqueid --json 2>/dev/null | grep -oE '"Unique ID": *"[^"]+"' | head -1 | grep -oE '[a-f0-9]{16}' || true)"
 
-# --- 2. Recreate the container ---
-log "Recreating container '$CONTAINER_NAME' (port $PORT, GPU $GPU_INDEX)…"
-docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-
-if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
-  # Qwen3.8: download the pinned weights, then run with the release serve flags.
+# --- Qwen3.8 weight download (function, reusable by install and --download-only) ---
+download_weights() {
+  # Qwen3.8: download the pinned weights.
   # Two weight choices: 3-bit W3A4 (NVFP4 target + W3 int3 rotation + DFlash2
   # FP8 draft, the fastest) and MXFP4 (the most accurate, base download alone).
   PAITON_BASE="${PAITON_BASE:-$HOME/Desktop/AI/paiton-vllm-plugin}"
   DRAFT_DIR="$PAITON_BASE/model-cache/qwen38-dflash2"
-  CACHE_DIR="$PAITON_BASE/runtime-cache/qwen38-rocm10-20261107"
   if [ "$KIND" = "qwen38" ]; then
     TARGET_DIR="$PAITON_BASE/model-cache/qwen38-nvfp4"
     W3ROT_DIR="$PAITON_BASE/model-cache/qwen38-w3rot-int3"
@@ -120,7 +119,7 @@ if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
     TARGET_REPO="amd/Qwen3.8-27B-Quark-AWQ-MXFP4"
     TARGET_REV="5233554c5fa56afda40150556b95573c2d7d29c0"
   fi
-  mkdir -p "$TARGET_DIR" "$DRAFT_DIR" "$CACHE_DIR"
+  mkdir -p "$TARGET_DIR" "$DRAFT_DIR"
   if [ -n "$W3ROT_DIR" ]; then
     mkdir -p "$W3ROT_DIR"
   fi
@@ -139,16 +138,35 @@ if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
     "$HF_VENV/bin/pip" install -q huggingface_hub || { log "ERROR: could not install huggingface_hub in the venv"; exit 1; }
     HF="$HF_VENV/bin/python -m huggingface_hub"
   fi
-  download() { # $1=repo $2=revision $3=local-dir
+  _hf_download() { # $1=repo $2=revision $3=local-dir
     log "Downloading $1 (revision ${2:0:12}…) → $3"
     $HF download "$1" --revision "$2" --local-dir "$3"
   }
-  [ -f "$TARGET_DIR/config.json" ] || download "$TARGET_REPO" "$TARGET_REV" "$TARGET_DIR"
-  [ -f "$DRAFT_DIR/config.json" ]  || download "tcclaviger/Qwen3.8-27B-DFlash2-FP8" "ee0cb26a8279b7910cc28d82a8a3e15e4728d56f" "$DRAFT_DIR"
+  [ -f "$TARGET_DIR/config.json" ] || _hf_download "$TARGET_REPO" "$TARGET_REV" "$TARGET_DIR"
+  [ -f "$DRAFT_DIR/config.json" ]  || _hf_download "tcclaviger/Qwen3.8-27B-DFlash2-FP8" "ee0cb26a8279b7910cc28d82a8a3e15e4728d56f" "$DRAFT_DIR"
   if [ -n "$W3ROT_DIR" ]; then
-    [ -f "$W3ROT_DIR/config.json" ] || download "EliovpAI/Qwen3.8-27B-W3Rot-INT3-Paiton-RDNA4" "aee42dfdb78e851462743120a575bf2d6f7b9882" "$W3ROT_DIR"
+    [ -f "$W3ROT_DIR/config.json" ] || _hf_download "EliovpAI/Qwen3.8-27B-W3Rot-INT3-Paiton-RDNA4" "aee42dfdb78e851462743120a575bf2d6f7b9882" "$W3ROT_DIR"
   fi
   log "Model weights ready"
+}
+
+# --- Download-only mode: image + weights, no container start ---
+if [ "$DOWNLOAD_ONLY" = "--download-only" ]; then
+  if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
+    download_weights
+  fi
+  log "Download complete for $MODEL (image + weights). No container started."
+  exit 0
+fi
+
+# --- 2. Recreate the container ---
+log "Recreating container '$CONTAINER_NAME' (port $PORT, GPU $GPU_INDEX)…"
+docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
+  download_weights
+  CACHE_DIR="$PAITON_BASE/runtime-cache/qwen38-rocm10-20261107"
+  mkdir -p "$CACHE_DIR"
 
   if [ "$KIND" = "qwen38" ]; then
     # 3-bit W3A4: NVFP4 target + W3 int3 rotation + DFlash2 FP8 draft, long

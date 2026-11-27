@@ -1821,6 +1821,18 @@ def install_paiton():
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
 
 
+@app.route('/api/installer/paiton-download', methods=['POST'])
+def download_paiton():
+    """Download the Paiton model weights for the chosen model (pull image + download
+    weights, NO container start). Body: {model?: slug}. AMD ROCm only.
+    """
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_paiton_download_job(body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 409
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+
 @app.route('/api/installer/vllm-models')
 def vllm_models():
     """List the curated vLLM models (safetensors) the user can download."""

@@ -259,6 +259,7 @@ The **Add Service** dialog in the UI generates entries like this for you.
 | `GET /api/models` | Scan of installed models (HF cache, GGUF dirs, loader APIs) |
 | `GET /api/models/browse?dir=/path` | List a directory (manual model picker) |
 | `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking,paiton}` · `POST /api/installer/uninstall` (kind: vllm, hermes, comfyui, lmstudio, openviking) | Installers |
+| `POST /api/installer/paiton-download` (body: `{"model": "<slug>"}`) | Paiton model weight downloader (pull image + download weights, no container start) |
 | `GET /api/installer/vllm-models` · `POST /api/installer/vllm-model` (body: `{"slug": "<slug>"}`) | vLLM model downloader (curated list + download) |
 | `GET /api/installer/lmstudio-models` · `POST /api/installer/lmstudio-model` (body: `{"slug": "<slug>"}`) | LM Studio model downloader (curated list + download) |
 | `GET /api/comfyui/status` · `POST /api/comfyui/start` (body: `{"gpu": <index>}`) · `POST /api/comfyui/stop` · `GET /api/comfyui/logs` | ComfyUI start/stop + logs |

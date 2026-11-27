@@ -194,7 +194,8 @@ systemctl --user restart vllm-manager-frontend
 | `GET /api/system` | CPU / 内存 / 磁盘使用 |
 | `GET /api/models` | 已安装模型扫描（HF 缓存、GGUF 目录、loader API） |
 | `GET /api/models/browse?dir=/path` | 列出目录（手动选模型） |
-| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking}` · `POST /api/installer/uninstall`（kind: vllm, hermes, comfyui, lmstudio, openviking） | 安装器 |
+| `GET /api/installer/status` · `POST /api/installer/{vllm,hermes,comfyui,lmstudio,openviking,paiton}` · `POST /api/installer/uninstall`（kind: vllm, hermes, comfyui, lmstudio, openviking） | 安装器 |
+| `POST /api/installer/paiton-download`（body: `{"model": "<slug>"}`） | Paiton 模型权重下载器（拉取镜像 + 下载权重，不启动容器） |
 | `GET /api/comfyui/status` · `POST /api/comfyui/start`（body: `{"gpu": <index>}`）· `POST /api/comfyui/stop` · `GET /api/comfyui/logs` | ComfyUI 启动/停止 + 日志 |
 | `GET /api/hermes/webapp-link?profile=<name>` | Hermes Web UI 的一次性链接 |
 
