@@ -20,6 +20,20 @@ terminal required.
 
 ---
 
+## Screenshots
+
+**The manager dashboard** — model service cards, live system monitor,
+generation throughput, and the one-click installers:
+
+![LLM Manager dashboard](docs/screenshots/llm-manager.png)
+
+**The Hermes web UI** — the agent workspace the manager's chat buttons open
+(sessions, cron jobs, profiles, and the model chat):
+
+![Hermes web UI](docs/screenshots/hermes-web-ui.png)
+
+---
+
 ## Quick start
 
 Three steps:

@@ -19,6 +19,18 @@
 
 ---
 
+## 截图
+
+**管理器仪表盘** —— 模型服务卡片、实时系统监控、生成吞吐量，以及一键安装器：
+
+![LLM Manager 仪表盘](docs/screenshots/llm-manager.png)
+
+**Hermes 网页界面** —— 管理器聊天按钮打开的 agent 工作区（会话、定时任务、配置文件和模型聊天）：
+
+![Hermes 网页界面](docs/screenshots/hermes-web-ui.png)
+
+---
+
 ## 快速开始
 
 三步：
