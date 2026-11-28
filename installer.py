@@ -187,6 +187,184 @@ def detect_paiton_docker():
     return out
 
 
+def stop_paiton():
+    """Stop all running Paiton containers. Returns (success, message)."""
+    if not shutil.which('docker'):
+        return False, 'docker not found'
+    # Stop all running paiton-* containers.
+    rc, txt = _run(['docker', 'ps', '--filter', 'name=paiton-', '--filter', 'status=running', '--format', '{{.Names}}'], timeout=10)
+    names = [n.strip() for n in (txt.strip().splitlines() or []) if n.strip()]
+    if not names:
+        return True, 'no running paiton containers'
+    for name in names:
+        _run(['docker', 'stop', name], timeout=30)
+    return True, f'stopped {len(names)} container(s): {", ".join(names)}'
+
+
+def uninstall_paiton():
+    """Remove all Paiton containers (stopped and running). Returns (success, message)."""
+    if not shutil.which('docker'):
+        return False, 'docker not found'
+    # Remove all paiton-* containers.
+    rc, txt = _run(['docker', 'ps', '-a', '--filter', 'name=paiton-', '--format', '{{.Names}}'], timeout=10)
+    names = [n.strip() for n in (txt.strip().splitlines() or []) if n.strip()]
+    if not names:
+        return True, 'no paiton containers'
+    for name in names:
+        _run(['docker', 'rm', '-f', name], timeout=30)
+    return True, f'removed {len(names)} container(s): {", ".join(names)}'
+
+
+def restart_paiton():
+    """Restart all running Paiton containers (stop + start). Returns (success, message)."""
+    if not shutil.which('docker'):
+        return False, 'docker not found'
+    rc, txt = _run(['docker', 'ps', '--filter', 'name=paiton-', '--filter', 'status=running', '--format', '{{.Names}}'], timeout=10)
+    names = [n.strip() for n in (txt.strip().splitlines() or []) if n.strip()]
+    if not names:
+        return True, 'no running paiton containers'
+    for name in names:
+        _run(['docker', 'restart', name], timeout=60)
+    return True, f'restarted {len(names)} container(s): {", ".join(names)}'
+
+
+def _paiton_repo():
+    """The Paiton plugin repo (where the launchers live). Overridable via
+    platform.json 'paiton_repo'."""
+    from loaders.base import expand, load_platform_config
+    return Path(expand(load_platform_config().get('paiton_repo', '~/Desktop/AI/paiton-vllm-plugin')))
+
+
+def _git_in(repo, args, timeout=30):
+    """Run a git command in the given repo dir. Returns (ok, output)."""
+    try:
+        r = subprocess.run(['git'] + args, cwd=str(repo),
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode == 0, (r.stdout + r.stderr).strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def check_paiton_update():
+    """Check for newer Paiton upstream: compare the local paiton-vllm-plugin
+    checkout against origin/main on GitHub (same pattern as the manager's own
+    updater). The Paiton Docker images are pinned per model in install_paiton.sh
+    (and the GHCR org is API-private), so the repo's new commits are the
+    upstream signal — a new image release lands as commits to the launchers +
+    a new pin. Returns a dict (no HTTP status — the endpoint wraps it)."""
+    repo = _paiton_repo()
+    out = {
+        'success': True,
+        'installed': detect_paiton_docker()['installed'],
+        'current': {'commit': None, 'date': None},
+        'latest': {'commit': None, 'date': None},
+        'up_to_date': False,
+        'ahead': 0,
+        'behind': 0,
+        'commits': [],
+        'diffstat': [],
+        'message': '',
+    }
+    if not (repo / '.git').exists():
+        out['success'] = False
+        out['message'] = f'Paiton repo not found at {repo}'
+        return out
+    ok, _ = _git_in(repo, ['fetch', '--quiet', 'origin', 'main'], timeout=60)
+    if not ok:
+        out['success'] = False
+        out['message'] = 'git fetch failed (check network / GitHub access)'
+        return out
+    ok, local = _git_in(repo, ['rev-parse', 'HEAD'])
+    ok_remote, remote = _git_in(repo, ['rev-parse', 'origin/main'])
+    if not (ok and ok_remote):
+        out['success'] = False
+        out['message'] = 'Paiton repo is not a git checkout with a HEAD'
+        return out
+    out['current']['commit'] = local[:8]
+    ok, d = _git_in(repo, ['log', '-1', '--pretty=%cs'])
+    if ok:
+        out['current']['date'] = d
+    out['latest']['commit'] = remote[:8]
+    ok, d = _git_in(repo, ['log', '-1', '--pretty=%cs', 'origin/main'])
+    if ok:
+        out['latest']['date'] = d
+    if local == remote:
+        out['up_to_date'] = True
+        return out
+    ok, commits = _git_in(repo, ['log', '--pretty=format:%h %s', 'HEAD..origin/main'])
+    if ok:
+        out['commits'] = commits.splitlines()
+    ok, diffstat = _git_in(repo, ['diff', '--stat', 'HEAD..origin/main'])
+    if ok:
+        out['diffstat'] = diffstat.splitlines()
+    ok, behind = _git_in(repo, ['rev-list', '--count', 'HEAD..origin/main'])
+    ok_ahead, ahead = _git_in(repo, ['rev-list', '--count', 'origin/main..HEAD'])
+    out['behind'] = int(behind or 0)
+    out['ahead'] = int(ahead or 0)
+    return out
+
+
+def update_paiton_repo():
+    """Apply the Paiton update: git pull --ff-only in the paiton-vllm-plugin
+    checkout (refreshes the launchers the install scripts delegate to).
+    Returns (success, message)."""
+    repo = _paiton_repo()
+    if not (repo / '.git').exists():
+        return False, f'Paiton repo not found at {repo}'
+    # Discard any local (uncommitted) changes so the pull can't conflict.
+    _git_in(repo, ['checkout', '--', '.'])
+    ok, out = _git_in(repo, ['pull', '--ff-only', '--quiet', 'origin', 'main'], timeout=120)
+    if not ok:
+        return False, f'git pull failed (fast-forward only): {out[:300]}'
+    ok, commit = _git_in(repo, ['rev-parse', '--short', 'HEAD'])
+    return True, f'Paiton repo updated to {commit}'
+
+
+def detect_strata():
+    """Strata: Docker image present? terminal CLI installed? containers?"""
+    out = {'installed': False, 'image': None, 'version': None, 'cli': False, 'detail': '', 'containers': []}
+    if not shutil.which('docker'):
+        out['detail'] = 'docker not found'
+        return out
+    rc, txt = _run(['docker', 'images', 'ghcr.io/niko1221/strata', '--format', '{{.Tag}}'], timeout=10)
+    tags = [l for l in (txt.strip().splitlines() or []) if l.strip()]
+    if tags:
+        out['installed'] = True
+        out['image'] = 'ghcr.io/niko1221/strata'
+        out['version'] = tags[0]
+    # terminal CLI (strata launch/monitor/connect)
+    cli = shutil.which('strata')
+    if not cli:
+        for cand in (Path.home() / '.local' / 'bin' / 'strata',
+                     Path.home() / 'Applications' / 'strata',
+                     Path.home() / '.strata' / 'bin' / 'strata'):
+            if cand.exists():
+                cli = str(cand)
+                break
+    out['cli'] = bool(cli)
+    out['cli_version'] = None
+    if cli:
+        try:
+            _, vtxt = _run([cli, '--version'], timeout=10)
+            m = re.search(r'strata ([\d.]+)', vtxt or '')
+            out['cli_version'] = m.group(1) if m else None
+        except Exception:
+            pass
+    # containers (running or stopped)
+    rc, txt = _run(['docker', 'ps', '-a', '--filter', 'name=strata-', '--format', '{{.Names}}\t{{.Status}}'], timeout=10)
+    lines = [l for l in (txt.strip().splitlines() or []) if l.strip()]
+    for line in lines:
+        name, status = (line.split('\t') + [''])[:2]
+        out['containers'].append({'name': name, 'running': 'Up' in status, 'status': status.strip()})
+    if out['installed']:
+        out['detail'] = f"image {out['version']}" + (' + CLI' if out['cli'] else ' (no terminal CLI)')
+    elif out['cli']:
+        out['detail'] = 'terminal CLI only, no Docker image'
+    else:
+        out['detail'] = 'not installed'
+    return out
+
+
 def detect_hermes():
     """Hermes Agent: installed? version? webapp enabled? webapp reachable?"""
     out = {'installed': False, 'version': None, 'webapp_enabled': None, 'webapp_reachable': False, 'detail': ''}
@@ -411,6 +589,8 @@ def _build_install_cmd(kind, params):
         return ['bash', str(SCRIPTS_DIR / 'install_lmstudio.sh')]
     elif kind == 'openviking':
         return ['bash', str(SCRIPTS_DIR / 'install_openviking.sh')]
+    elif kind == 'strata':
+        return ['bash', str(SCRIPTS_DIR / 'install_strata.sh')]
     return None
 
 
@@ -458,7 +638,8 @@ def start_update_job(kind, params):
 
 def start_paiton_job(params):
     """Start a Paiton Docker install job for the chosen model (pull image + download
-    weights + recreate container). params: {model?: slug, port?}. Returns (job_id, error)."""
+    weights + recreate container). params: {model?: slug, port?, kv_cache?, context?}.
+    Returns (job_id, error)."""
     model = params.get('model') or 'qwen38'
     with JOBS_LOCK:
         active = _ACTIVE.get('paiton')
@@ -478,6 +659,12 @@ def start_paiton_job(params):
     LOG_DIR.mkdir(exist_ok=True)
     port = str(params.get('port') or '')
     cmd = ['bash', str(SCRIPTS_DIR / 'install_paiton.sh'), model, port]
+    kv_cache = params.get('kv_cache') or ''
+    context = str(params.get('context') or '')
+    if kv_cache:
+        cmd += ['--kv-cache', kv_cache]
+    if context:
+        cmd += ['--context', context]
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
     t.start()
     return job_id, None
@@ -504,6 +691,161 @@ def start_paiton_download_job(params):
         _ACTIVE['paiton_download'] = job_id
     LOG_DIR.mkdir(exist_ok=True)
     cmd = ['bash', str(SCRIPTS_DIR / 'install_paiton.sh'), model, '', '--download-only']
+    t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
+    t.start()
+    return job_id, None
+
+
+def _strata_version_num(tag):
+    """'0.2.20-rocm-gfx120x' or 'v0.2.23' -> (0, 2, 20) or None."""
+    m = re.search(r'(\d+)\.(\d+)\.(\d+)', tag or '')
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def check_strata_update():
+    """Check for a newer Strata release: the latest GitHub release (with its
+    notes) plus the newest published ROCm gfx120x Docker image tag, compared
+    against what is installed. Returns a dict (no HTTP status — the endpoint
+    wraps it)."""
+    cur = detect_strata()
+    out = {
+        'success': True,
+        'installed': cur['installed'],
+        'current': {'image': cur.get('version'), 'cli': cur.get('cli_version')},
+        'latest': None,
+        'up_to_date': False,
+        'release_pending': False,
+        'message': '',
+    }
+    # 1) Latest GitHub release (tag, name, date, notes)
+    try:
+        req = urllib.request.Request(
+            'https://api.github.com/repos/Niko1221/Strata/releases/latest',
+            headers={'User-Agent': 'vllm-model-manager'})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            rel = json.load(r)
+    except Exception as e:
+        out['success'] = False
+        out['message'] = f'GitHub check failed: {e}'
+        return out
+    rel_tag = rel.get('tag_name') or ''
+    rel_num = _strata_version_num(rel_tag)
+    out['latest'] = {
+        'tag': rel_tag,
+        'version': '.'.join(map(str, rel_num)) if rel_num else rel_tag,
+        'name': rel.get('name') or rel_tag,
+        'date': (rel.get('published_at') or '')[:10],
+        'notes': rel.get('body') or '',
+        'image': None,
+    }
+    # 2) Newest published ROCm gfx120x image tag (paginated tag list)
+    try:
+        tok_req = urllib.request.Request(
+            'https://ghcr.io/token?scope=repository:niko1221/strata:pull',
+            headers={'User-Agent': 'vllm-model-manager'})
+        with urllib.request.urlopen(tok_req, timeout=15) as r:
+            token = json.load(r).get('token', '')
+        tags, last = [], None
+        for _ in range(5):
+            url = 'https://ghcr.io/v2/niko1221/strata/tags/list'
+            if last:
+                url += f'?last={last}'
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'vllm-model-manager',
+                'Authorization': f'Bearer {token}'})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                page = json.load(r).get('tags') or []
+            tags.extend(page)
+            if len(page) < 100:
+                break
+            last = page[-1]
+        rocm = [t for t in tags if t.endswith('-rocm-gfx120x') and not t.startswith('latest')]
+        nums = [(t, _strata_version_num(t)) for t in rocm]
+        nums = [(t, n) for t, n in nums if n]
+        if nums:
+            best_tag, _ = max(nums, key=lambda x: x[1])
+            out['latest']['image'] = f'ghcr.io/niko1221/strata:{best_tag}'
+    except Exception as e:
+        out['message'] = (out['message'] + ' ' if out['message'] else '') + f'GHCR tag check failed: {e}'
+    # 3) Compare installed vs latest
+    cur_num = _strata_version_num(cur.get('version') or '')
+    if cur.get('version') and cur['version'].startswith('latest'):
+        out['up_to_date'] = True
+    elif cur_num and out['latest'] and out['latest'].get('image'):
+        lat_num = _strata_version_num(out['latest']['image'].rsplit(':', 1)[-1])
+        if lat_num:
+            out['up_to_date'] = cur_num >= lat_num
+    elif cur_num and rel_num:
+        out['up_to_date'] = cur_num >= rel_num
+    # A newer GitHub release exists but its ROCm image is not published yet
+    if cur_num and rel_num and cur_num < rel_num:
+        out['release_pending'] = True
+    return out
+
+
+def start_strata_job(params):
+    """Start a Strata install job (pull the AMD Docker image + install the
+    terminal CLI). params: {tag?: image tag to pull (update flow)}. Returns (job_id, error)."""
+    with JOBS_LOCK:
+        active = _ACTIVE.get('strata')
+        if active and JOBS.get(active, {}).get('status') == 'running':
+            return None, f'strata install already running (job {active})'
+        ts = int(time.time())
+        job_id = f'strata-{ts}'
+        log_file = LOG_DIR / f'strata_{ts}.log'
+        JOBS[job_id] = {
+            'kind': 'strata',
+            'status': 'running',
+            'log_file': str(log_file),
+            'started_at': datetime.now().isoformat(),
+        }
+        _ACTIVE['strata'] = job_id
+    LOG_DIR.mkdir(exist_ok=True)
+    cmd = ['bash', str(SCRIPTS_DIR / 'install_strata.sh'), (params or {}).get('tag') or '']
+    t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
+    t.start()
+    return job_id, None
+
+
+def start_strata_download_job(params):
+    """Start a Strata model-download job: download the chosen model into the
+    volume the service for it would use (NO service left running). params:
+    {model: display name from the Strata catalog}. Returns (job_id, error)."""
+    from loaders.strata import STRATA_MODELS
+    from loaders.base import make_service_key
+
+    model = (params or {}).get('model') or ''
+    cfg = STRATA_MODELS.get(model)
+    if not cfg:
+        return None, f'Unknown Strata model: {model!r}'
+    key = make_service_key('strata', model)
+    volume = f'strata-data-{key}'
+    # If a service for this model already exists, the download must stop it for
+    # the duration (Strata allows one engine per volume) and restart it after —
+    # the script handles both, and always brings the service back up.
+    try:
+        _svc_cfg = json.loads((Path(__file__).parent / 'config' / 'services.json').read_text())
+    except Exception:
+        _svc_cfg = {}
+    service_key = key if _svc_cfg.get(key) else ''
+    with JOBS_LOCK:
+        active = _ACTIVE.get('strata_download')
+        if active and JOBS.get(active, {}).get('status') == 'running':
+            return None, f'strata download already running (job {active})'
+        ts = int(time.time())
+        job_id = f'strata-download-{ts}'
+        log_file = LOG_DIR / f'strata_download_{ts}.log'
+        JOBS[job_id] = {
+            'kind': 'strata_download',
+            'status': 'running',
+            'log_file': str(log_file),
+            'started_at': datetime.now().isoformat(),
+            'model': model,
+        }
+        _ACTIVE['strata_download'] = job_id
+    LOG_DIR.mkdir(exist_ok=True)
+    cmd = ['bash', str(SCRIPTS_DIR / 'strata_download_model.sh'),
+           cfg['family'], cfg['model'], volume, service_key]
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
     t.start()
     return job_id, None
@@ -548,6 +890,8 @@ def start_uninstall_job(kind, params):
     elif kind == 'openviking':
         remove_workspace = 'true' if params.get('remove_workspace') else 'false'
         cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_openviking.sh'), remove_workspace]
+    elif kind == 'strata':
+        cmd = ['bash', str(SCRIPTS_DIR / 'uninstall_strata.sh')]
     else:
         return None, f'unknown kind: {kind}'
     t = threading.Thread(target=_job_worker, args=(job_id, log_file, cmd), daemon=True)
@@ -595,6 +939,113 @@ def start_vllm_model_job(params):
 def start_lmstudio_model_job(params):
     """Start an LM Studio model download job (GGUF from HF)."""
     return _start_model_job('lmstudio', params)
+
+
+def check_model_download_status(models, kind='vllm'):
+    """Check download status for a list of models. Adds 'downloaded' (bool) and
+    'download_pct' (0-100) to each model dict.
+    
+    For vllm: checks if the HF repo directory exists in ~/.cache/huggingface/hub/
+    For lmstudio: checks if the GGUF file exists in LM Studio's model directory
+    For paiton: checks if the model cache directories exist in the Paiton plugin
+    """
+    import os
+    import glob
+    hf_hub = os.path.expanduser('~/.cache/huggingface/hub')
+    lms_models_dir = os.path.expanduser('~/.lmstudio/models')
+    paiton_cache = os.path.expanduser('~/Desktop/AI/paiton-vllm-plugin/model-cache')
+    
+    for m in models:
+        repo = m.get('repo', '')
+        slug = m.get('slug', '')
+        
+        if kind == 'vllm':
+            # HF cache structure: models--{org}--{repo}/snapshots/
+            # e.g. "Qwen/Qwen3.5-9B" -> "models--Qwen--Qwen3.5-9B"
+            repo_dir = os.path.join(hf_hub, f'models--{repo.replace("/", "--")}')
+            if os.path.exists(repo_dir):
+                # Check if there are actual files in the snapshot
+                snapshots = os.path.join(repo_dir, 'snapshots')
+                if os.path.exists(snapshots):
+                    # Count files in all snapshots
+                    total_files = 0
+                    for snap in os.listdir(snapshots):
+                        snap_path = os.path.join(snapshots, snap)
+                        if os.path.isdir(snap_path):
+                            for f in os.listdir(snap_path):
+                                if os.path.isfile(os.path.join(snap_path, f)):
+                                    total_files += 1
+                    if total_files > 0:
+                        m['downloaded'] = True
+                        m['download_pct'] = 100
+                        continue
+                # Directory exists but no files — partial download
+                m['downloaded'] = False
+                m['download_pct'] = 0
+            else:
+                m['downloaded'] = False
+                m['download_pct'] = 0
+        elif kind == 'lmstudio':
+            # Check if the GGUF file exists in LM Studio's model directory.
+            # LM Studio may use a different org name than the HF repo, so
+            # search all subdirectories for the filename.
+            file = m.get('file', '')
+            if file:
+                # Search for the file in all subdirectories of ~/.lmstudio/models/
+                # (files are at org/repo/file, so use */* to match two levels)
+                found = False
+                if os.path.exists(lms_models_dir):
+                    if '*' in file:
+                        pattern = os.path.join(lms_models_dir, '*', '*', file)
+                        matches = glob.glob(pattern)
+                        found = len(matches) > 0
+                    else:
+                        pattern = os.path.join(lms_models_dir, '*', '*', file)
+                        matches = glob.glob(pattern)
+                        found = len(matches) > 0
+                m['downloaded'] = found
+                m['download_pct'] = 100 if found else 0
+            else:
+                # No specific file — check if the repo directory exists anywhere
+                org, _, repo_name = repo.partition('/')
+                found = False
+                if os.path.exists(lms_models_dir):
+                    # Search for the repo directory in all subdirectories
+                    pattern = os.path.join(lms_models_dir, '*', repo_name)
+                    matches = glob.glob(pattern)
+                    found = len(matches) > 0
+                m['downloaded'] = found
+                m['download_pct'] = 100 if found else 0
+        elif kind == 'paiton':
+            # Paiton models are stored in ~/Desktop/AI/paiton-vllm-plugin/model-cache/
+            # with subdirectories named after the model (e.g., qwen38-nvfp4, qwen38-mxfp4)
+            slug = m.get('slug', '')
+            found = False
+            if os.path.exists(paiton_cache):
+                # Check common Paiton model directory patterns
+                # qwen38 -> qwen38-nvfp4, qwen38-w3rot-int3, qwen38-dflash2
+                # qwen38-mxfp4 -> qwen38-mxfp4
+                # gpt-oss-20b -> gpt-oss-20b (or similar)
+                if slug == 'qwen38':
+                    # Check if any of the qwen38 directories exist with files
+                    for dir_name in ['qwen38-nvfp4', 'qwen38-w3rot-int3', 'qwen38-dflash2']:
+                        dir_path = os.path.join(paiton_cache, dir_name)
+                        if os.path.exists(dir_path) and any(os.path.isfile(os.path.join(dir_path, f)) for f in os.listdir(dir_path)):
+                            found = True
+                            break
+                elif slug == 'qwen38-mxfp4':
+                    dir_path = os.path.join(paiton_cache, 'qwen38-mxfp4')
+                    if os.path.exists(dir_path) and any(os.path.isfile(os.path.join(dir_path, f)) for f in os.listdir(dir_path)):
+                        found = True
+                else:
+                    # For other models, check if a directory with the slug name exists
+                    dir_path = os.path.join(paiton_cache, slug)
+                    if os.path.exists(dir_path) and any(os.path.isfile(os.path.join(dir_path, f)) for f in os.listdir(dir_path)):
+                        found = True
+            m['downloaded'] = found
+            m['download_pct'] = 100 if found else 0
+    
+    return models
 
 
 def tail_job_log(job_id, lines=200):

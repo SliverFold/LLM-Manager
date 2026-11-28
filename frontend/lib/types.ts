@@ -35,6 +35,7 @@ export interface ServiceInfo {
   message?: string;
   default_params?: DefaultParams;
   loader?: string;
+  model?: string;
 }
 
 export interface StartConfig {

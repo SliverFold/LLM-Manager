@@ -27,9 +27,10 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
   const { t } = useLang();
 
   // Open a model's chat in a Hermes Webapp tab (one-use launch ticket).
-  // Each model maps to a Hermes profile: lmstudio -> small-brain, big -> default.
+  // The backend resolves the service key to the right Hermes profile
+  // (big -> default, lmstudio -> small-brain, strata_* -> a per-service
+  // profile bound to that service's model/port/key — created on first use).
   const openModelChat = async (key: string) => {
-    const profile = key === 'lmstudio' ? 'small-brain' : '';
     const win = window.open('about:blank', '_blank');
     const fail = (msg: string) => {
       if (win) {
@@ -42,7 +43,7 @@ export function SystemSidebar({ systemInfo, loading, gpus, gpusLoading, services
       }
     };
     try {
-      const url = `/api/hermes/webapp-link${profile ? `?profile=${profile}` : ''}`;
+      const url = `/api/hermes/webapp-link?service=${encodeURIComponent(key)}`;
       const res = await fetch(getApiUrl(url));
       const data = await res.json();
       if (data.success && data.url) {

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import { getApiUrl } from '@/lib/api-config';
 import { useLang } from '@/lib/i18n';
-import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon, Sparkles, Brain, ChevronDown } from 'lucide-react';
+import { Cpu, Bot, Download, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, Trash2, XCircle, Image as ImageIcon, Sparkles, Brain, ChevronDown, Search } from 'lucide-react';
 
 interface InstallerStatus {
   system: {
@@ -23,6 +23,15 @@ interface InstallerStatus {
   docker: { installed: boolean; running: boolean; detail: string };
   paiton_docker: { installed: boolean; running: boolean; image: string | null; version: string | null; detail: string };
   paiton: { installed: boolean; version: string | null; detail: string };
+  strata: {
+    installed: boolean;
+    image: string | null;
+    version: string | null;
+    cli: boolean;
+    cli_version?: string | null;
+    detail: string;
+    containers: { name: string; running: boolean; status: string }[];
+  };
   qwen: { installed: boolean; agent: boolean; code: boolean; detail: string };
   hermes: {
     installed: boolean;
@@ -55,15 +64,7 @@ interface InstallerStatus {
 // `bits` is the served quantization (so users know the precision they get);
 // `size` is the total download estimate (image + weights, which are a separate
 // download — the docker image does NOT bundle the weights).
-const PAITON_MODELS = [
-  { slug: 'qwen38', name: 'Qwen3.8 27B', bits: '3-bit W3A4 + FP8 draft', size: '~66 GB' },
-  { slug: 'qwen38-mxfp4', name: 'Qwen3.8 27B (MXFP4)', bits: 'MXFP4 (4-bit)', size: '~62 GB' },
-  { slug: 'gpt-oss-20b', name: 'GPT-OSS 20B', bits: 'MXFP4 (4-bit)', size: '~44 GB' },
-  { slug: 'minicpm5-2b', name: 'MiniCPM5 2B', bits: 'W4A16 (4-bit)', size: '~40 GB' },
-  { slug: 'ornith-1.5', name: 'Ornith 1.5 35B', bits: 'MXFP4 (4-bit)', size: '~28 GB' },
-  { slug: 'qwen3-coder-30b', name: 'Qwen3-Coder 30B', bits: 'INT4 (4-bit)', size: '~30 GB' },
-  { slug: 'qwen38-neo-coder', name: 'Qwen3.8 NEO CODER MAX', bits: 'Q4_K_M (4-bit)', size: '~25 GB' },
-];
+// Download status is fetched from the backend on mount.
 
 // A collapsible installer card: the header (icon + title + status badge +
 // chevron) is always visible and clickable; clicking it toggles the full
@@ -123,15 +124,65 @@ export function InstallerSection() {
   const [paitonInstalling, setPaitonInstalling] = useState(false);
   const [paitonDownloading, setPaitonDownloading] = useState(false);
   const [paitonModel, setPaitonModel] = useState('qwen38');
+  const [strataInstalling, setStrataInstalling] = useState(false);
+  // Strata update check (the card's Update button): the check result + the
+  // in-flight states.
+  interface StrataUpdateCheck {
+    success: boolean;
+    installed: boolean;
+    current: { image: string | null; cli: string | null };
+    latest: { tag: string; version: string; name: string; date: string; notes: string; image: string | null } | null;
+    up_to_date: boolean;
+    release_pending: boolean;
+    message?: string;
+  }
+  const [strataCheck, setStrataCheck] = useState<StrataUpdateCheck | null>(null);
+  const [strataChecking, setStrataChecking] = useState(false);
+  const [strataUpdating, setStrataUpdating] = useState(false);
+  // Paiton update check (the card's Update button): the local paiton-vllm-plugin
+  // checkout vs origin/main (new upstream commits = new release activity).
+  interface PaitonUpdateCheck {
+    success: boolean;
+    installed: boolean;
+    current: { commit: string | null; date: string | null };
+    latest: { commit: string | null; date: string | null };
+    up_to_date: boolean;
+    ahead: number;
+    behind: number;
+    commits: string[];
+    diffstat: string[];
+    message?: string;
+  }
+  const [paitonCheck, setPaitonCheck] = useState<PaitonUpdateCheck | null>(null);
+  const [paitonChecking, setPaitonChecking] = useState(false);
+  const [paitonUpdating, setPaitonUpdating] = useState(false);
+  // Strata model download (the card's model selector + Install button):
+  // catalog from /api/installer/strata/models, selected model, download state.
+  interface StrataModel { name: string; family: string; model: string; size: string; bits: string; service: boolean }
+  const [strataModels, setStrataModels] = useState<StrataModel[]>([]);
+  const [strataModel, setStrataModel] = useState('');
+  const [strataDownloading, setStrataDownloading] = useState(false);
+  useEffect(() => {
+    fetch(getApiUrl('/api/installer/strata/models'))
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.success && Array.isArray(d.models)) {
+          setStrataModels(d.models);
+          setStrataModel((cur) => cur || d.models[0]?.name || '');
+        }
+      })
+      .catch(() => {});
+  }, []);
   // Model downloaders (vLLM + LM Studio)
-  const [vllmModels, setVllmModels] = useState<{ slug: string; name: string; size: string; vram?: number | null }[]>([]);
-  const [lmstudioModels, setLmstudioModels] = useState<{ slug: string; name: string; size: string; vram?: number | null }[]>([]);
+  const [vllmModels, setVllmModels] = useState<{ slug: string; name: string; size: string; vram?: number | null; downloaded?: boolean; download_pct?: number }[]>([]);
+  const [lmstudioModels, setLmstudioModels] = useState<{ slug: string; name: string; size: string; vram?: number | null; downloaded?: boolean; download_pct?: number }[]>([]);
+  const [paitonModels, setPaitonModels] = useState<{ slug: string; name: string; bits: string; size: string; downloaded?: boolean; download_pct?: number }[]>([]);
   const [vllmModel, setVllmModel] = useState('');
   const [lmstudioModel, setLmstudioModel] = useState('');
   const [vllmModelDownloading, setVllmModelDownloading] = useState(false);
   const [lmstudioModelDownloading, setLmstudioModelDownloading] = useState(false);
-  const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
-  const [updating, setUpdating] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking'>(null);
+  const [uninstalling, setUninstalling] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking' | 'strata'>(null);
+  const [updating, setUpdating] = useState<null | 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking' | 'strata'>(null);
   const [removeVenv, setRemoveVenv] = useState(false);
   const [removeCheckout, setRemoveCheckout] = useState(false);
   const [removeWorkspace, setRemoveWorkspace] = useState(false);
@@ -176,12 +227,14 @@ export function InstallerSection() {
     let active = true;
     const load = async () => {
       try {
-        const [vres, lres] = await Promise.all([
+        const [vres, lres, pres] = await Promise.all([
           fetch(getApiUrl('/api/installer/vllm-models')),
           fetch(getApiUrl('/api/installer/lmstudio-models')),
+          fetch(getApiUrl('/api/installer/paiton-models')),
         ]);
         const vdata = await vres.json();
         const ldata = await lres.json();
+        const pdata = await pres.json();
         if (!active) return;
         if (vdata.success) {
           setVllmModels(vdata.models);
@@ -190,6 +243,9 @@ export function InstallerSection() {
         if (ldata.success) {
           setLmstudioModels(ldata.models);
           if (ldata.models.length) setLmstudioModel(ldata.models[0].slug);
+        }
+        if (pdata.success) {
+          setPaitonModels(pdata.models);
         }
       } catch {
         // backend briefly down — ignore
@@ -215,6 +271,8 @@ export function InstallerSection() {
             setInstalling(null);
             setUninstalling(null);
             setUpdating(null);
+            setStrataInstalling(false);
+            setStrataUpdating(false);
             setLogJob(null);
             const done = data.status === 'done';
             const okKey = logJobType === 'uninstall' ? 'inst.uninstallDone' : logJobType === 'update' ? 'inst.updateDone' : 'inst.installDone';
@@ -268,7 +326,7 @@ export function InstallerSection() {
   );
 
   const startUninstall = useCallback(
-    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking') => {
+    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking' | 'strata') => {
       if (kind === 'vllm') {
         if (!window.confirm(t('inst.uninstallConfirm', { venv: venv }))) return;
       } else if (kind === 'hermes') {
@@ -277,6 +335,8 @@ export function InstallerSection() {
         if (!window.confirm(t('inst.comfyuiUninstallConfirm', { dir: comfyDir }))) return;
       } else if (kind === 'openviking') {
         if (!window.confirm(t('inst.ovUninstallConfirm'))) return;
+      } else if (kind === 'strata') {
+        if (!window.confirm(t('inst.strataUninstallConfirm'))) return;
       } else {
         if (!window.confirm(t('inst.lmsUninstallConfirm'))) return;
       }
@@ -315,7 +375,7 @@ export function InstallerSection() {
   // re-resolves the latest vendor-correct PyTorch wheels (ROCm from AMD,
   // CUDA from NVIDIA) + the latest vLLM; the others do a quick refresh.
   const startUpdate = useCallback(
-    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking') => {
+    async (kind: 'vllm' | 'hermes' | 'comfyui' | 'lmstudio' | 'openviking' | 'strata') => {
       if (kind === 'vllm') {
         if (!window.confirm(t('inst.vllmUpdateConfirm', { venv: venv }))) return;
       }
@@ -412,6 +472,162 @@ export function InstallerSection() {
     },
     [status, t, paitonModel]
   );
+
+  const startStrata = useCallback(
+    async () => {
+      const dockerOk = status?.docker?.installed && status?.docker?.running;
+      if (!dockerOk) {
+        toast.error(t('inst.paitonNoDocker'));
+        return;
+      }
+      if (!window.confirm(t('inst.strataConfirm'))) return;
+      setStrataInstalling(true);
+      try {
+        const res = await fetch(getApiUrl('/api/installer/strata'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setStrataInstalling(false);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setStrataInstalling(false);
+      }
+    },
+    [status, t]
+  );
+
+  // Download the selected Strata model into the volume the service for it would
+  // use (no service left running — a temporary container, stopped once the
+  // files are downloaded and verified).
+  const startStrataDownload = useCallback(
+    async () => {
+      const dockerOk = status?.docker?.installed && status?.docker?.running;
+      if (!dockerOk) {
+        toast.error(t('inst.paitonNoDocker'));
+        return;
+      }
+      if (!strataModel) return;
+      if (!window.confirm(t('inst.strataDownloadConfirm', { model: strataModel }))) return;
+      setStrataDownloading(true);
+      try {
+        const res = await fetch(getApiUrl('/api/installer/strata/download'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: strataModel }),
+        });
+        const data: { success: boolean; job?: string; message?: string } = await res.json();
+        if (data.success && data.job) {
+          setLogJobType('install');
+          setLogJob(data.job);
+          setLogText('');
+          setLogStatus('running');
+        } else {
+          toast.error(data.message || t('inst.startFailed'));
+          setStrataDownloading(false);
+        }
+      } catch (e: any) {
+        toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+        setStrataDownloading(false);
+      }
+    },
+    [status, t, strataModel]
+  );
+
+  // Check for a newer Strata release (GitHub + GHCR), then show the dialog.
+  const checkStrataUpdate = useCallback(async () => {
+    setStrataChecking(true);
+    try {
+      const res = await fetch(getApiUrl('/api/installer/strata/check'));
+      const data: StrataUpdateCheck = await res.json();
+      if (data.success) {
+        setStrataCheck(data);
+      } else {
+        toast.error(data.message || t('inst.strataCheckFailed'));
+      }
+    } catch (e: any) {
+      toast.error(t('inst.strataCheckFailed', { msg: e?.message || String(e) }));
+    } finally {
+      setStrataChecking(false);
+    }
+  }, [t]);
+
+  // Install the update: pull the newest ROCm image the check found + refresh the CLI.
+  const applyStrataUpdate = useCallback(async () => {
+    // The check returns the full image ref (ghcr.io/niko1221/strata:<tag>);
+    // install_strata.sh takes the bare tag (it prefixes the image itself).
+    const tag = strataCheck?.latest?.image?.split(':').pop();
+    if (!tag) return;
+    setStrataUpdating(true);
+    try {
+      const res = await fetch(getApiUrl('/api/installer/strata'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag }),
+      });
+      const data: { success: boolean; job?: string; message?: string } = await res.json();
+      if (data.success && data.job) {
+        setLogJobType('update');
+        setLogJob(data.job);
+        setLogText('');
+        setLogStatus('running');
+        setStrataCheck(null);
+      } else {
+        toast.error(data.message || t('inst.startFailed'));
+        setStrataUpdating(false);
+      }
+    } catch (e: any) {
+      toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+      setStrataUpdating(false);
+    }
+  }, [strataCheck, t]);
+
+  // Check for newer Paiton upstream (new commits on the paiton-vllm-plugin repo
+  // vs the local checkout the install scripts use), then show the dialog.
+  const checkPaitonUpdate = useCallback(async () => {
+    setPaitonChecking(true);
+    try {
+      const res = await fetch(getApiUrl('/api/installer/paiton/check'));
+      const data: PaitonUpdateCheck = await res.json();
+      if (data.success) {
+        setPaitonCheck(data);
+      } else {
+        toast.error(data.message || t('inst.paitonCheckFailed'));
+      }
+    } catch (e: any) {
+      toast.error(t('inst.paitonCheckFailed', { msg: e?.message || String(e) }));
+    } finally {
+      setPaitonChecking(false);
+    }
+  }, [t]);
+
+  // Apply the Paiton update: git pull --ff-only in the plugin repo (launchers).
+  const applyPaitonUpdate = useCallback(async () => {
+    setPaitonUpdating(true);
+    try {
+      const res = await fetch(getApiUrl('/api/installer/paiton/update'), { method: 'POST' });
+      const data: { success: boolean; message?: string } = await res.json();
+      if (data.success) {
+        toast.success(data.message || t('inst.paitonUpdated'));
+        setPaitonCheck(null);
+      } else {
+        toast.error(data.message || t('inst.startFailed'));
+      }
+    } catch (e: any) {
+      toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+    } finally {
+      setPaitonUpdating(false);
+    }
+  }, [t]);
 
   const startVllmModel = useCallback(
     async () => {
@@ -515,6 +731,7 @@ export function InstallerSection() {
   const sys = status?.system;
   const docker = status?.docker;
   const paitonDocker = status?.paiton_docker;
+  const strata = status?.strata;
   const vllm = status?.vllm;
   const qwenStatus = status?.qwen;
   const hermes = status?.hermes;
@@ -584,6 +801,41 @@ export function InstallerSection() {
           </div>
 
           <div className="space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null || updating !== null}>
+                <Download className="h-3 w-3 mr-1" />
+                {installing === 'vllm' ? t('inst.installing') : t('inst.install')}
+              </Button>
+              {vllm?.installed && (
+                <Button variant="outline" onClick={() => startUpdate('vllm')} disabled={updating !== null || installing !== null || uninstalling !== null}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'vllm' ? 'animate-spin' : ''}`} />
+                  {updating === 'vllm' ? t('inst.updating') : t('inst.update')}
+                </Button>
+              )}
+              {vllm?.installed && (
+                <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null || updating !== null}>
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  {uninstalling === 'vllm' ? t('inst.uninstalling') : t('inst.uninstall')}
+                </Button>
+              )}
+              {vllm?.installed && (
+                <span className="text-xs text-muted-foreground font-mono truncate">{vllm.venv}</span>
+              )}
+            </div>
+            {vllm?.installed && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={removeVenv}
+                  onChange={(e) => setRemoveVenv(e.target.checked)}
+                  className="h-3 w-3 rounded border-input"
+                />
+                {t('inst.removeVenv')}
+              </label>
+            )}
+          </div>
+
+          <div className="space-y-2">
             <label className="text-xs font-medium text-muted-foreground">{t('inst.venvLabel')}</label>
             <input
               value={venv}
@@ -633,41 +885,6 @@ export function InstallerSection() {
             )}
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button onClick={() => startInstall('vllm')} disabled={installing !== null || uninstalling !== null || updating !== null}>
-                <Download className="h-3 w-3 mr-1" />
-                {installing === 'vllm' ? t('inst.installing') : t('inst.install')}
-              </Button>
-              {vllm?.installed && (
-                <Button variant="outline" onClick={() => startUpdate('vllm')} disabled={updating !== null || installing !== null || uninstalling !== null}>
-                  <RefreshCw className={`h-3 w-3 mr-1 ${updating === 'vllm' ? 'animate-spin' : ''}`} />
-                  {updating === 'vllm' ? t('inst.updating') : t('inst.update')}
-                </Button>
-              )}
-              {vllm?.installed && (
-                <Button variant="destructive" onClick={() => startUninstall('vllm')} disabled={uninstalling !== null || installing !== null || updating !== null}>
-                  <Trash2 className="h-3 w-3 mr-1" />
-                  {uninstalling === 'vllm' ? t('inst.uninstalling') : t('inst.uninstall')}
-                </Button>
-              )}
-              {vllm?.installed && (
-                <span className="text-xs text-muted-foreground font-mono truncate">{vllm.venv}</span>
-              )}
-            </div>
-            {vllm?.installed && (
-              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={removeVenv}
-                  onChange={(e) => setRemoveVenv(e.target.checked)}
-                  className="h-3 w-3 rounded border-input"
-                />
-                {t('inst.removeVenv')}
-              </label>
-            )}
-          </div>
-
           {/* Model downloader (vLLM) */}
           <div className="space-y-2">
             <label className="text-xs font-medium text-muted-foreground">{t('inst.vllmModelLabel')}</label>
@@ -678,7 +895,9 @@ export function InstallerSection() {
                 className="w-[220px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {vllmModels.map((m) => (
-                  <option key={m.slug} value={m.slug}>{m.name} ({m.size})</option>
+                  <option key={m.slug} value={m.slug}>
+                    {m.name} ({m.size}){m.downloaded ? ' ✓' : m.download_pct ? ` (${m.download_pct}%)` : ''}
+                  </option>
                 ))}
               </select>
               <Button onClick={startVllmModel} disabled={vllmModelDownloading || installing !== null || uninstalling !== null || updating !== null}>
@@ -738,42 +957,151 @@ export function InstallerSection() {
               )
             )}
             <span className="text-xs text-muted-foreground">
-              {t('inst.paitonSize', { size: PAITON_MODELS.find((m) => m.slug === paitonModel)?.size || '~66 GB' })}
+              {t('inst.paitonSize', { size: paitonModels.find((m) => m.slug === paitonModel)?.size || '~66 GB' })}
             </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={paitonModel}
-              onChange={(e) => setPaitonModel(e.target.value)}
-              className="w-[380px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {PAITON_MODELS.map((m) => (
-                <option key={m.slug} value={m.slug}>{m.name} — {m.bits} · {m.size}</option>
-              ))}
-            </select>
             <Button
               onClick={startPaiton}
               disabled={paitonInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}
             >
-              {paitonDocker?.installed ? <RefreshCw className={`h-3 w-3 mr-1 ${paitonInstalling ? 'animate-spin' : ''}`} /> : <Download className="h-3 w-3 mr-1" />}
-              {paitonInstalling ? t('inst.paitonInstalling') : paitonDocker?.installed ? t('inst.paitonUpdate') : t('inst.paitonInstall')}
+              <Download className="h-3 w-3 mr-1" />
+              {paitonInstalling ? t('inst.paitonInstalling') : t('inst.paitonInstall')}
             </Button>
-            <Button
-              variant="outline"
-              onClick={startPaitonDownload}
-              disabled={paitonDownloading || paitonInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}
-            >
-              <Download className={`h-3 w-3 mr-1 ${paitonDownloading ? 'animate-pulse' : ''}`} />
-              {t('inst.download')}
-            </Button>
+            {paitonDocker?.installed && (
+              <Button
+                variant="outline"
+                onClick={checkPaitonUpdate}
+                disabled={paitonChecking || paitonUpdating || paitonInstalling || installing !== null || uninstalling !== null || updating !== null}
+              >
+                <Search className={`h-3 w-3 mr-1 ${paitonChecking ? 'animate-pulse' : ''}`} />
+                {paitonChecking ? t('inst.strataChecking') : t('inst.update')}
+              </Button>
+            )}
+            {paitonDocker?.installed && paitonDocker?.running && (
+              <Button
+                onClick={async () => {
+                  try {
+                    const res = await fetch(getApiUrl('/api/installer/paiton/restart'), { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) toast.success(data.message || t('inst.paitonRestarted'));
+                    else toast.error(data.message || t('inst.startFailed'));
+                  } catch (e: any) {
+                    toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+                  }
+                }}
+                disabled={installing !== null || uninstalling !== null || updating !== null}
+              >
+                <RefreshCw className="h-3 w-3 mr-1" />
+                {t('inst.paitonRestart')}
+              </Button>
+            )}
+            {paitonDocker?.installed && (
+              <Button
+                variant="destructive"
+                onClick={async () => {
+                  if (!window.confirm(t('inst.paitonUninstallConfirm'))) return;
+                  try {
+                    const res = await fetch(getApiUrl('/api/installer/paiton/uninstall'), { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) toast.success(data.message || t('inst.paitonUninstalled'));
+                    else toast.error(data.message || t('inst.startFailed'));
+                  } catch (e: any) {
+                    toast.error(t('inst.startFailed', { msg: e?.message || String(e) }));
+                  }
+                }}
+                disabled={installing !== null || uninstalling !== null || updating !== null}
+              >
+                <Trash2 className="h-3 w-3 mr-1" />
+                {t('inst.paitonUninstall')}
+              </Button>
+            )}
             {paitonDocker?.running && (
               <span className="text-xs text-muted-foreground font-mono truncate">{paitonDocker.detail}</span>
             )}
           </div>
+
+          {/* Model downloader (Paiton) */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">{t('inst.paitonModelLabel')}</label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={paitonModel}
+                onChange={(e) => setPaitonModel(e.target.value)}
+                className="w-[380px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                {paitonModels.map((m) => (
+                  <option key={m.slug} value={m.slug}>
+                    {m.name} — {m.bits} · {m.size}{m.downloaded ? ' ✓' : ''}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                onClick={startPaitonDownload}
+                disabled={paitonDownloading || paitonInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}
+              >
+                <Download className={`h-3 w-3 mr-1 ${paitonDownloading ? 'animate-pulse' : ''}`} />
+                {t('inst.download')}
+              </Button>
+            </div>
+          </div>
         </CollapsibleCard>
 
-        {/* LM Studio + Beledarian Suite card */}
-        <CollapsibleCard
+        {/* Paiton update check dialog: local repo vs upstream (new commits) + install/decline */}
+        <Dialog open={paitonCheck !== null} onOpenChange={(open) => { if (!open) setPaitonCheck(null); }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {paitonCheck?.up_to_date ? t('inst.paitonUpToDate') : t('inst.paitonUpdateAvailable')}
+              </DialogTitle>
+            </DialogHeader>
+            {paitonCheck && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground shrink-0">{t('inst.strataCurrent')}:</span>
+                  <span className="font-mono">{paitonCheck.current?.commit || '—'}</span>
+                  {paitonCheck.current?.date && (
+                    <span className="text-xs text-muted-foreground">{paitonCheck.current.date}</span>
+                  )}
+                </div>
+                {paitonCheck.behind > 0 && (
+                  <>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-muted-foreground shrink-0">{t('inst.strataLatest')}:</span>
+                      <span className="font-mono">{paitonCheck.latest?.commit || '—'}</span>
+                      {paitonCheck.latest?.date && (
+                        <span className="text-xs text-muted-foreground">{paitonCheck.latest.date}</span>
+                      )}
+                    </div>
+                    <div className="max-h-48 overflow-y-auto rounded-md border bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap">
+                      {paitonCheck.commits.join('\n')}
+                    </div>
+                    {(paitonCheck.ahead ?? 0) > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        {t('inst.paitonLocalAhead', { count: paitonCheck.ahead })}
+                      </p>
+                    )}
+                  </>
+                )}
+                <div className="flex justify-end gap-2">
+                  {!paitonCheck.up_to_date && (paitonCheck.ahead ?? 0) === 0 && (
+                    <Button onClick={applyPaitonUpdate} disabled={paitonUpdating}>
+                      <RefreshCw className={`h-3 w-3 mr-1 ${paitonUpdating ? 'animate-spin' : ''}`} />
+                      {paitonUpdating ? t('inst.strataUpdating') : t('inst.strataInstallUpdate')}
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => setPaitonCheck(null)}>
+                    {paitonCheck.up_to_date ? t('inst.strataOk') : t('inst.strataDecline')}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+      {/* LM Studio + Beledarian Suite card */}
+      <CollapsibleCard
           icon={<Sparkles className="h-4 w-4 text-primary" />}
           title={t('inst.lmsTitle')}
           headerRight={siteLink('https://lmstudio.ai')}
@@ -833,7 +1161,9 @@ export function InstallerSection() {
                 className="w-[220px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {lmstudioModels.map((m) => (
-                  <option key={m.slug} value={m.slug}>{m.name} ({m.size})</option>
+                  <option key={m.slug} value={m.slug}>
+                    {m.name} ({m.size}){m.downloaded ? ' ✓' : m.download_pct ? ` (${m.download_pct}%)` : ''}
+                  </option>
                 ))}
               </select>
               <Button onClick={startLmstudioModel} disabled={lmstudioModelDownloading || installing !== null || uninstalling !== null || updating !== null}>
@@ -843,6 +1173,169 @@ export function InstallerSection() {
             </div>
           </div>
         </CollapsibleCard>
+
+        {/* Strata — local AI engine (Docker image + terminal CLI) */}
+        <CollapsibleCard
+          icon={<Sparkles className="h-4 w-4 text-primary" />}
+          title={t('inst.strataTitle')}
+          headerRight={siteLink('https://github.com/niko1221/strata')}
+          statusBadges={
+            <>
+              {strata?.installed ? (
+                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.installed')}
+                </Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.notInstalled')}</Badge>
+              )}
+              {docker && !docker.installed && (
+                <Badge variant="destructive">
+                  <AlertCircle className="mr-1 h-3 w-3" />
+                  {t('inst.paitonNoDocker')}
+                </Badge>
+              )}
+            </>
+          }
+          expanded={expanded.has('strata')}
+          onToggle={() => toggleCard('strata')}
+        >
+          <CardDescription>{t('inst.strataDesc')}</CardDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            {docker && (
+              docker.installed && docker.running ? (
+                <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {t('inst.paitonDockerOk')}
+                </Badge>
+              ) : (
+                <Badge variant="destructive">
+                  <AlertCircle className="mr-1 h-3 w-3" />
+                  {t('inst.paitonNoDocker')}
+                </Badge>
+              )
+            )}
+            {strata?.installed && (
+              <Badge variant="secondary">{t('inst.strataImageOk')} {strata.version}</Badge>
+            )}
+            {strata?.installed && (
+              strata.cli ? (
+                <Badge variant="secondary">{t('inst.strataCli')}</Badge>
+              ) : (
+                <Badge variant="outline">{t('inst.strataNoCli')}</Badge>
+              )
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              onClick={startStrata}
+              disabled={strataInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running}
+            >
+              <Download className="h-3 w-3 mr-1" />
+              {strataInstalling ? t('inst.strataInstalling') : t('inst.strataInstall')}
+            </Button>
+            {strata?.installed && (
+              <Button
+                variant="outline"
+                onClick={checkStrataUpdate}
+                disabled={strataChecking || strataUpdating || strataInstalling || installing !== null || uninstalling !== null || updating !== null}
+              >
+                <Search className={`h-3 w-3 mr-1 ${strataChecking ? 'animate-pulse' : ''}`} />
+                {strataChecking ? t('inst.strataChecking') : t('inst.update')}
+              </Button>
+            )}
+            {strata?.installed && (
+              <Button variant="destructive" onClick={() => startUninstall('strata')} disabled={uninstalling !== null || installing !== null || updating !== null}>
+                <Trash2 className="h-3 w-3 mr-1" />
+                {uninstalling === 'strata' ? t('inst.uninstalling') : t('inst.uninstall')}
+              </Button>
+            )}
+            {strata?.detail && (
+              <span className="text-xs text-muted-foreground font-mono truncate">{strata.detail}</span>
+            )}
+          </div>
+
+          {/* Model downloader (Strata) */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">{t('inst.strataModelSelect')}</label>
+            <div className="flex items-center gap-2 flex-wrap">
+              {strataModels.length > 0 && (
+                <select
+                  value={strataModel}
+                  onChange={(e) => setStrataModel(e.target.value)}
+                  className="w-[380px] rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {strataModels.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.name} — {m.bits} · {m.size}{m.service ? ` (${t('inst.strataHasService')})` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <Button
+                variant="outline"
+                onClick={startStrataDownload}
+                disabled={strataDownloading || strataInstalling || installing !== null || uninstalling !== null || updating !== null || !docker?.installed || !docker?.running || !strataModel}
+              >
+                <Download className={`h-3 w-3 mr-1 ${strataDownloading ? 'animate-pulse' : ''}`} />
+                {strataDownloading ? t('inst.strataDownloading') : t('inst.download')}
+              </Button>
+            </div>
+          </div>
+        </CollapsibleCard>
+
+        {/* Strata update check dialog: latest release + release notes + install/decline */}
+        <Dialog open={strataCheck !== null} onOpenChange={(open) => { if (!open) setStrataCheck(null); }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {strataCheck?.up_to_date ? t('inst.strataUpToDate') : t('inst.strataUpdateAvailable')}
+              </DialogTitle>
+            </DialogHeader>
+            {strataCheck && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground shrink-0">{t('inst.strataCurrent')}:</span>
+                  <span className="font-mono">{strataCheck.current?.image || '—'}</span>
+                  {strataCheck.current?.cli && (
+                    <span className="text-xs text-muted-foreground font-mono">CLI {strataCheck.current.cli}</span>
+                  )}
+                </div>
+                {strataCheck.latest && (
+                  <>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-muted-foreground shrink-0">{t('inst.strataLatest')}:</span>
+                      <span className="font-mono">{strataCheck.latest.image || strataCheck.latest.version}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {strataCheck.latest.name}{strataCheck.latest.date ? ` · ${strataCheck.latest.date}` : ''}
+                      </span>
+                    </div>
+                    {strataCheck.latest.notes && (
+                      <div className="max-h-48 overflow-y-auto rounded-md border bg-muted/30 p-3 text-xs whitespace-pre-wrap">
+                        {strataCheck.latest.notes}
+                      </div>
+                    )}
+                  </>
+                )}
+                {strataCheck.release_pending && (
+                  <p className="text-xs text-muted-foreground">{t('inst.strataReleasePending')}</p>
+                )}
+                <div className="flex justify-end gap-2">
+                  {!strataCheck.up_to_date && strataCheck.latest?.image && (
+                    <Button onClick={applyStrataUpdate} disabled={strataUpdating}>
+                      <RefreshCw className={`h-3 w-3 mr-1 ${strataUpdating ? 'animate-spin' : ''}`} />
+                      {strataUpdating ? t('inst.strataUpdating') : t('inst.strataInstallUpdate')}
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => setStrataCheck(null)}>
+                    {strataCheck.up_to_date ? t('inst.strataOk') : t('inst.strataDecline')}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
         </div>
 
         {/* right column: Hermes (compact) + ComfyUI stacked */}

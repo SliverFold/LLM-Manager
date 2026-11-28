@@ -14,6 +14,7 @@ from .ollama import OllamaLoader
 from .llama_cpp import LlamaCppLoader
 from .lmstudio import LMStudioLoader
 from .paiton import PaitonLoader
+from .strata import StrataLoader
 
 _REGISTRY = {
     VllmLoader.key: VllmLoader,
@@ -21,6 +22,7 @@ _REGISTRY = {
     LlamaCppLoader.key: LlamaCppLoader,
     LMStudioLoader.key: LMStudioLoader,
     PaitonLoader.key: PaitonLoader,
+    StrataLoader.key: StrataLoader,
 }
 
 

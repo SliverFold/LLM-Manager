@@ -9,22 +9,37 @@
 #     Qwen3.8 NEO CODER MAX): a pinned Paiton image that pulls/downloads its
 #     own weights on first run (no separate weight download).
 #
-# Idempotent: re-running updates the image (docker pull) and re-creates the
-# container. Qwen3.8 weights are reused (hf download is a no-op when the
-# revision is already present).
+# Idempotent: re-running skips the image pull and weight downloads when they
+# are already local (the log says so explicitly), and re-creates the
+# container — that recreation is the only real work of an update.
 #
 # Usage: install_paiton.sh <model-slug> [port] [--download-only]
+#                        [--kv-cache auto|kv4|fp8] [--context TOKENS]
 #   model-slug: qwen38 | qwen38-mxfp4 | gpt-oss-20b | minicpm5-2b | ornith-1.5 |
 #               qwen3-coder-30b | qwen38-neo-coder
 #   port:       host port for the API (default per model)
 #   --download-only: pull the image + download the weights for the model, but do
 #               NOT start the container (for pre-downloading).
+#   --kv-cache:   KV cache type (auto|kv4|fp8) — passed to the launcher
+#   --context:    max context tokens (e.g. 262144 for 262K) — passed to the launcher
 set -euo pipefail
 log() { echo "[$(date '+%Y-%d %H:%M:%S')] $*"; }
 
 MODEL="${1:-qwen38}"
 PORT="${2:-}"
 DOWNLOAD_ONLY="${3:-}"
+
+# Parse optional flags (KV cache + context) — only apply to qwen38/qwen38-mxfp4
+KV_CACHE=""
+CONTEXT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --kv-cache)  KV_CACHE="$2";  shift 2 ;;
+    --context)   CONTEXT="$2";   shift 2 ;;
+    --download-only) DOWNLOAD_ONLY="--download-only"; shift ;;
+    *) break ;;
+  esac
+done
 
 # --- Per-model config ---
 case "$MODEL" in
@@ -88,12 +103,21 @@ fi
 log "GPU: $(rocm-smi --showproductname --json 2>/dev/null | grep -oE '"GFX Version": *"[^"]+"' | head -1 || echo 'AMD GPU')"
 log "Model: $MODEL  Container: $CONTAINER_NAME  Port: $PORT"
 
-# --- 1. Pull the pinned image ---
-log "Pulling Paiton image ($IMAGE)…"
+# --- 1. Pull the pinned image (skip the pull if it's already local) ---
 if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
-  docker pull "$IMAGE@$IMAGE_SHA" || docker pull "$IMAGE"
+  IMAGE_REF="$IMAGE@$IMAGE_SHA"
 else
-  docker pull "$IMAGE"
+  IMAGE_REF="$IMAGE"
+fi
+if docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
+  log "Image already present locally — skipping pull ($IMAGE_REF)"
+else
+  log "Image not local — pulling $IMAGE_REF…"
+  if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
+    docker pull "$IMAGE_REF" || docker pull "$IMAGE"
+  else
+    docker pull "$IMAGE"
+  fi
 fi
 log "Image ready"
 
@@ -142,10 +166,22 @@ download_weights() {
     log "Downloading $1 (revision ${2:0:12}…) → $3"
     $HF download "$1" --revision "$2" --local-dir "$3"
   }
-  [ -f "$TARGET_DIR/config.json" ] || _hf_download "$TARGET_REPO" "$TARGET_REV" "$TARGET_DIR"
-  [ -f "$DRAFT_DIR/config.json" ]  || _hf_download "tcclaviger/Qwen3.8-27B-DFlash2-FP8" "ee0cb26a8279b7910cc28d82a8a3e15e4728d56f" "$DRAFT_DIR"
+  if [ -f "$TARGET_DIR/config.json" ]; then
+    log "Target weights already present — skipping download ($TARGET_DIR)"
+  else
+    _hf_download "$TARGET_REPO" "$TARGET_REV" "$TARGET_DIR"
+  fi
+  if [ -f "$DRAFT_DIR/config.json" ]; then
+    log "DFlash2 draft already present — skipping download ($DRAFT_DIR)"
+  else
+    _hf_download "tcclaviger/Qwen3.8-27B-DFlash2-FP8" "ee0cb26a8279b7910cc28d82a8a3e15e4728d56f" "$DRAFT_DIR"
+  fi
   if [ -n "$W3ROT_DIR" ]; then
-    [ -f "$W3ROT_DIR/config.json" ] || _hf_download "EliovpAI/Qwen3.8-27B-W3Rot-INT3-Paiton-RDNA4" "aee42dfdb78e851462743120a575bf2d6f7b9882" "$W3ROT_DIR"
+    if [ -f "$W3ROT_DIR/config.json" ]; then
+      log "W3Rot weights already present — skipping download ($W3ROT_DIR)"
+    else
+      _hf_download "EliovpAI/Qwen3.8-27B-W3Rot-INT3-Paiton-RDNA4" "aee42dfdb78e851462743120a575bf2d6f7b9882" "$W3ROT_DIR"
+    fi
   fi
   log "Model weights ready"
 }
@@ -159,8 +195,8 @@ if [ "$DOWNLOAD_ONLY" = "--download-only" ]; then
   exit 0
 fi
 
-# --- 2. Recreate the container ---
-log "Recreating container '$CONTAINER_NAME' (port $PORT, GPU $GPU_INDEX)…"
+# --- 2. Recreate the container (the only step that does real work on an update) ---
+log "Recreating container '$CONTAINER_NAME' (port $PORT, GPU $GPU_INDEX) — the model restarts here (briefly offline)"
 docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
@@ -168,106 +204,48 @@ if [ "$KIND" = "qwen38" ] || [ "$KIND" = "qwen38-mxfp4" ]; then
   CACHE_DIR="$PAITON_BASE/runtime-cache/qwen38-rocm10-20261107"
   mkdir -p "$CACHE_DIR"
 
+  # Delegate to the working launchers (run-3bit.sh / run-mxfp4.sh), which use
+  # the tested launch-rocm10.py that sets RADIANCE_GDN_LAZY=0 (eager) when
+  # prefix caching is enabled. The hand-written docker run command above was
+  # missing that env var, which triggered the "ROCm10 external runtime lazy
+  # port" error.
+  export PAITON_TARGET_DIR="$TARGET_DIR"
+  export PAITON_DRAFT_DIR="$DRAFT_DIR"
+  export PAITON_W3ROT_DIR="${W3ROT_DIR:-}"
+  export PAITON_CACHE_DIR="$CACHE_DIR"
+
   if [ "$KIND" = "qwen38" ]; then
     # 3-bit W3A4: NVFP4 target + W3 int3 rotation + DFlash2 FP8 draft, long
-    # context (245K), vision, prefix caching.
-    docker run -d \
-      --name "$CONTAINER_NAME" \
-      --device /dev/kfd \
-      --device /dev/dri \
-      -e "HIP_VISIBLE_DEVICES=$GPU_INDEX" \
-      -e "CUDA_VISIBLE_DEVICES=$GPU_INDEX" \
-      ${ROCR_DEV:+-e "ROCR_VISIBLE_DEVICES=GPU-$ROCR_DEV"} \
-      -e "HIP_PLATFORM=amd" \
-      -e "HIP_ARCHITECTURES=gfx1201" \
-      -e "HIP_FORCE_DEV_KERNARG=1" \
-      -e "PYTORCH_NVML_BASED_CUDA_CHECK=1" \
-      -v "$TARGET_DIR:/models/target:ro" \
-      -v "$DRAFT_DIR:/models/draft:ro" \
-      -v "$W3ROT_DIR:/models/w3rot:ro" \
-      -v "$CACHE_DIR:/cache:rw" \
-      -p "$PORT:8000" \
-      "$IMAGE" \
-      serve /models/target \
-        --tokenizer /models/target \
-        --served-model-name Qwen3.8 \
-        --host 127.0.0.1 \
-        --port 8000 \
-        --tensor-parallel-size 1 \
-        --dtype bfloat16 \
-        --max-model-len 245000 \
-        --max-num-seqs 8 \
-        --max-num-batched-tokens 4096 \
-        --kv-cache-dtype fp8 \
-        --kv-cache-memory-bytes 9256000000 \
-        --gpu-memory-utilization 0.98 \
-        --enable-prefix-caching \
-        --enable-chunked-prefill \
-        --safetensors-load-strategy lazy \
-        --attention-backend R4D \
-        --compilation-config '{"cudagraph_capture_sizes": [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64], "pass_config": {"fuse_norm_quant": true, "fuse_act_quant": true}}' \
-        --speculative-config '{"method": "dflash", "model": "/models/draft", "num_speculative_tokens": 7, "draft_tensor_parallel_size": 1, "attention_backend": "TRITON_ATTN", "max_model_len": 245000, "disable_padded_drafter_batch": true, "draft_sample_method": "greedy"}' \
-        --mamba-cache-mode align \
-        --mamba-cache-dtype bfloat16 \
-        --mamba-ssm-cache-dtype float16 \
-        --no-async-scheduling \
-        --enable-auto-tool-choice \
-        --tool-call-parser qwen3_coder \
-        --reasoning-parser qwen3 \
-        --override-generation-config '{"temperature": 0.7, "top_p": 0.95, "top_k": 20}' \
-        --seed 42 \
-        --mm-processor-kwargs '{"max_pixels": 8294400}' \
-        --mm-processor-cache-gb 1 \
-        --default-chat-template-kwargs '{"enable_thinking": true}' \
-        --enable-prompt-tokens-details
+    # context (262K), vision, prefix caching.
+    LAUNCH_ARGS=(
+      --name "$CONTAINER_NAME"
+      --port "$PORT"
+      --mode long
+      --vision
+      --thinking on
+      --host 127.0.0.1
+      --detach
+      --compile-cache
+    )
+    [ -n "$KV_CACHE" ] && LAUNCH_ARGS+=(--kv-cache "$KV_CACHE")
+    [ -n "$CONTEXT" ]  && LAUNCH_ARGS+=(--context "$CONTEXT")
+    bash "$PAITON_BASE/models/Qwen3.8-MXFP4-DFlash2/run-3bit.sh" "${LAUNCH_ARGS[@]}"
   else
-    # MXFP4: the most accurate weights, from the base download alone — text-only
-    # (no vision), 65K context, no prefix caching (the 65K release mode).
-    docker run -d \
-      --name "$CONTAINER_NAME" \
-      --device /dev/kfd \
-      --device /dev/dri \
-      -e "HIP_VISIBLE_DEVICES=$GPU_INDEX" \
-      -e "CUDA_VISIBLE_DEVICES=$GPU_INDEX" \
-      ${ROCR_DEV:+-e "ROCR_VISIBLE_DEVICES=GPU-$ROCR_DEV"} \
-      -e "HIP_PLATFORM=amd" \
-      -e "HIP_ARCHITECTURES=gfx1201" \
-      -e "HIP_FORCE_DEV_KERNARG=1" \
-      -e "PYTORCH_NVML_BASED_CUDA_CHECK=1" \
-      -v "$TARGET_DIR:/models/target:ro" \
-      -v "$DRAFT_DIR:/models/draft:ro" \
-      -v "$CACHE_DIR:/cache:rw" \
-      -p "$PORT:8000" \
-      "$IMAGE" \
-      serve /models/target \
-        --tokenizer /models/target \
-        --served-model-name Qwen3.8 \
-        --host 127.0.0.1 \
-        --port 8000 \
-        --tensor-parallel-size 1 \
-        --dtype bfloat16 \
-        --max-model-len 65536 \
-        --max-num-seqs 8 \
-        --max-num-batched-tokens 4096 \
-        --kv-cache-dtype fp8 \
-        --kv-cache-memory-bytes 6535819798 \
-        --gpu-memory-utilization 0.98 \
-        --no-enable-prefix-caching \
-        --enable-chunked-prefill \
-        --language-model-only \
-        --safetensors-load-strategy lazy \
-        --attention-backend R4D \
-        --compilation-config '{"cudagraph_capture_sizes": [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64], "pass_config": {"fuse_norm_quant": true, "fuse_act_quant": true}}' \
-        --speculative-config '{"method": "dflash", "model": "/models/draft", "num_speculative_tokens": 7, "draft_tensor_parallel_size": 1, "attention_backend": "TRITON_ATTN", "max_model_len": 65536, "disable_padded_drafter_batch": true, "draft_sample_method": "greedy"}' \
-        --mamba-cache-mode align \
-        --mamba-cache-dtype bfloat16 \
-        --mamba-ssm-cache-dtype float16 \
-        --no-async-scheduling \
-        --enable-auto-tool-choice \
-        --tool-call-parser qwen3_coder \
-        --reasoning-parser qwen3 \
-        --override-generation-config '{"temperature": 0.7, "top_p": 0.95, "top_k": 20}' \
-        --seed 42
+    # MXFP4: the most accurate weights, from the base download alone — 220K
+    # context, vision, thinking on.
+    LAUNCH_ARGS=(
+      --name "$CONTAINER_NAME"
+      --port "$PORT"
+      --mode long
+      --vision
+      --thinking on
+      --host 127.0.0.1
+      --detach
+      --compile-cache
+    )
+    [ -n "$KV_CACHE" ] && LAUNCH_ARGS+=(--kv-cache "$KV_CACHE")
+    [ -n "$CONTEXT" ]  && LAUNCH_ARGS+=(--context "$CONTEXT")
+    bash "$PAITON_BASE/models/Qwen3.8-MXFP4-DFlash2/run-mxfp4.sh" "${LAUNCH_ARGS[@]}"
   fi
 else
   # The other models: a pinned Paiton image that pulls/downloads its own weights

@@ -54,3 +54,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Generated service scripts (contain per-service API keys)
+scripts/generated/

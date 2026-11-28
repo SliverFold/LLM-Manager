@@ -357,6 +357,7 @@ def get_services():
             'gpus': default_params.get('gpus', service.get('gpus', [])),
             'default_params': default_params,
             'loader': service.get('loader'),
+            'model': service.get('model'),
             **status
         }
 
@@ -629,6 +630,17 @@ def remove_service(service_key):
     # Remove from the in-memory registry + persist to services.json
     del SERVICES[service_key]
     save_services_config()
+
+    # Drop the bound Hermes chat profile for removed Strata services (best-effort).
+    if service_key.startswith('strata_'):
+        try:
+            profile = _hermes_profile_for_service(service_key)
+            if profile:
+                subprocess.run(['hermes', 'profile', 'delete', profile, '-y'],
+                               capture_output=True, text=True, timeout=30, env=_hermes_env())
+        except Exception:
+            pass
+
     return jsonify({
         'success': True,
         'message': 'Service removed',
@@ -745,8 +757,25 @@ def get_hermes_webapp_link():
 
     Optional ?profile=<name> param mints the link for that profile (default:
     the active/default profile).
+
+    Optional ?service=<service_key> param (preferred, used by the per-service
+    chat buttons) resolves the right profile from the service's loader — big ->
+    default, lmstudio -> small-brain, strata_* -> a per-service profile that is
+    created on first use and bound to that service's model/port/key.
     """
     profile = request.args.get('profile', '')
+    service_key = request.args.get('service', '')
+    if service_key:
+        service = SERVICES.get(service_key)
+        if service is None:
+            return jsonify({'success': False, 'message': f'Unknown service: {service_key}'}), 400
+        try:
+            if service_key.startswith('strata_'):
+                profile = _ensure_strata_hermes_profile(service_key, service)
+            else:
+                profile = _hermes_profile_for_service(service_key)
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Could not prepare the chat profile: {e}'}), 500
     try:
         env = os.environ.copy()
         env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
@@ -1127,6 +1156,115 @@ def get_vllm_metrics(service_key):
     return jsonify({'success': True, 'loader': 'vllm', **payload})
 
 
+def _strata_metrics(service):
+    """Live stats for a Strata service (OpenAI-compatible API, bearer key)."""
+    port = service.get('default_params', {}).get('port', 8080)
+    key = service.get('api_key', '')
+    req = urllib.request.Request(
+        f'http://127.0.0.1:{port}/v1/models',
+        headers={'Authorization': f'Bearer {key}'}
+    )
+    with urllib.request.urlopen(req, timeout=3) as r:
+        data = json.loads(r.read())
+    models = [m.get('id') for m in data.get('data', []) if m.get('id')]
+    return {'loader': 'strata', 'models': models, 'detail': models[0] if models else ''}
+
+
+def _hermes_env():
+    """Env for calling the hermes CLI from the manager backend."""
+    env = os.environ.copy()
+    env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+    return env
+
+
+def _hermes_profile_for_service(service_key):
+    """Map a manager service key to the Hermes profile whose chat talks to that
+    service's model (the manager's per-service chat buttons open a Hermes Webapp
+    tab bound to the right profile):
+      big        -> '' (the active/default profile — Qwen3.8-27B on :8000)
+      lmstudio   -> 'small-brain' (Qwen3.8-27B Q2 on LM Studio :45987)
+      strata_*   -> 'strata-<family>-<model>' (one profile per Strata service)
+    """
+    if service_key == 'big':
+        return ''
+    if service_key == 'lmstudio':
+        return 'small-brain'
+    if service_key.startswith('strata_'):
+        return 'strata-' + service_key[len('strata_'):].replace('_', '-')
+    return ''
+
+
+def _strata_model_id(service_key, service):
+    """The model ID Strata serves for this service: live from /v1/models when the
+    service is running, else derived from the key (strata_<family>_<model> ->
+    <family>-<model>, e.g. strata_inkling_2_mini_sq_15 -> inkling-2-mini-sq-15)."""
+    port = service.get('default_params', {}).get('port')
+    api_key = service.get('api_key', '')
+    if port:
+        try:
+            req = urllib.request.Request(
+                f'http://127.0.0.1:{port}/v1/models',
+                headers={'Authorization': f'Bearer {api_key}'}
+            )
+            with urllib.request.urlopen(req, timeout=3) as r:
+                data = json.loads(r.read())
+            ids = [m.get('id') for m in data.get('data', []) if m.get('id')]
+            if ids:
+                return ids[0]
+        except Exception:
+            pass  # service not running — fall back to the key-derived name
+    return service_key[len('strata_'):].replace('_', '-')
+
+
+def _ensure_strata_hermes_profile(service_key, service):
+    """Create + configure a Hermes profile for a Strata service on first use, so the
+    chat button can open a Hermes chat bound to this service's model. Idempotent:
+    existing profiles are left untouched."""
+    profile = _hermes_profile_for_service(service_key)
+    if not profile:
+        return profile
+    pdir = Path.home() / '.hermes' / 'profiles' / profile
+    if (pdir / 'config.yaml').exists():
+        return profile
+    env = _hermes_env()
+    r = subprocess.run(['hermes', 'profile', 'create', profile, '--no-alias'],
+                       capture_output=True, text=True, timeout=60, env=env)
+    if r.returncode != 0:
+        raise RuntimeError(f'hermes profile create failed: {(r.stdout + r.stderr).strip()[:300]}')
+    port = service.get('default_params', {}).get('port')
+    api_key = service.get('api_key', '')
+    # NOTE: model.context_length is pinned to 0 (not omitted) — 0 = "use whatever
+    # the model reports" (auto-detect from the live /v1/models). A static value
+    # would override the detection and go stale whenever the service's context
+    # param changes. The fresh-profile template defaults to 245K, so it must be
+    # explicitly zeroed.
+    settings = [
+        ('model.default', _strata_model_id(service_key, service)),
+        ('model.provider', 'custom'),
+        ('model.base_url', f'http://127.0.0.1:{port}/v1' if port else ''),
+        ('model.api_key', '${HERMES_MODEL_API_KEY}'),
+        ('model.context_length', '0'),
+    ]
+    for key, val in settings:
+        if not val:
+            continue
+        subprocess.run(['hermes', '-p', profile, 'config', 'set', key, val],
+                       capture_output=True, text=True, timeout=30, env=env)
+    if api_key:
+        env_file = pdir / '.env'
+        line = f'HERMES_MODEL_API_KEY={api_key}'
+        try:
+            text = env_file.read_text() if env_file.exists() else ''
+            if 'HERMES_MODEL_API_KEY' in text:
+                text = re.sub(r'^HERMES_MODEL_API_KEY=.*$', line, text, flags=re.M)
+            else:
+                text = (text + ('\n' if text and not text.endswith('\n') else '')) + line + '\n'
+            env_file.write_text(text)
+        except Exception as e:
+            raise RuntimeError(f'could not write profile .env: {e}')
+    return profile
+
+
 @app.route('/api/service/<service_key>/metrics')
 def get_service_metrics(service_key):
     """Unified live stats for any service — dispatches on the service's loader.
@@ -1146,6 +1284,8 @@ def get_service_metrics(service_key):
             if err:
                 return jsonify({'success': False, 'message': err, 'loader': loader_key})
             return jsonify({'success': True, 'loader': loader_key, **payload})
+        if loader_key == 'strata':
+            return jsonify({'success': True, **_strata_metrics(service)})
         if loader_key == 'ollama':
             port = service.get('default_params', {}).get('port', 11434)
             return jsonify({'success': True, **_ollama_metrics(port)})
@@ -1168,7 +1308,8 @@ def get_service_chat(service_key):
     port = service.get('default_params', {}).get('port', 8000)
     name = service.get('name', service_key)
     loader = service.get('loader', '')
-    return render_template('chat.html', port=port, name=name, loader=loader)
+    return render_template('chat.html', port=port, name=name, loader=loader,
+                           api_key=service.get('api_key', ''))
 
 @app.route('/api/system')
 def get_system_info():
@@ -1427,8 +1568,25 @@ def generate_service():
         'port': port,
         **(data.get('params') or {}),
     })
+    # Store the model name in the service config so the card can display it.
+    if model:
+        result['service']['model'] = model
     SERVICES[key] = result['service']
     save_services_config()
+    # Strata services get a bound Hermes chat profile at creation time (the chat
+    # button resolves to it later; creation failure never blocks service creation —
+    # the button creates it on first use as a fallback).
+    if key.startswith('strata_'):
+        try:
+            _ensure_strata_hermes_profile(key, result['service'])
+        except Exception as e:
+            return jsonify({
+                'success': True,
+                'key': key,
+                'service': result['service'],
+                'note': 'Restart the manager backend to activate the new service.',
+                'warning': f'Service created, but the Hermes chat profile could not be prepared: {e}',
+            })
     return jsonify({
         'success': True,
         'key': key,
@@ -1739,6 +1897,7 @@ def get_installer_status():
         'paiton': installer.detect_paiton(venv),
         'qwen': installer.detect_qwen(venv),
         'paiton_docker': installer.detect_paiton_docker(),
+        'strata': installer.detect_strata(),
         'hermes': installer.detect_hermes(),
         'comfyui': installer.detect_comfyui(comfy_dir),
         'lmstudio': installer.detect_lmstudio(),
@@ -1800,12 +1959,67 @@ def update_tool():
     """
     body = request.get_json(silent=True) or {}
     kind = body.get('kind')
-    if kind not in ('vllm', 'hermes', 'comfyui', 'lmstudio', 'openviking'):
-        return jsonify({'success': False, 'message': 'kind must be vllm, hermes, comfyui, lmstudio, or openviking'}), 400
+    if kind not in ('vllm', 'hermes', 'comfyui', 'lmstudio', 'openviking', 'strata'):
+        return jsonify({'success': False, 'message': 'kind must be vllm, hermes, comfyui, lmstudio, openviking, or strata'}), 400
     job_id, err = installer.start_update_job(kind, body)
     if err:
         return jsonify({'success': False, 'message': err}), 400
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+@app.route('/api/installer/strata', methods=['POST'])
+def install_strata():
+    """Install Strata: pull the AMD Docker image + install the terminal CLI.
+    Body: {tag?: image tag to pull (update flow)}. AMD ROCm only (R9700 + RX 9070, both gfx1201)."""
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_strata_job(body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 409
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
+
+@app.route('/api/installer/strata/check', methods=['GET'])
+def check_strata_update():
+    """Check for a newer Strata release: latest GitHub release (with notes) +
+    the newest published ROCm gfx120x Docker image tag, compared to what is
+    installed. Used by the Strata card's "Check for updates" button."""
+    try:
+        return jsonify(installer.check_strata_update())
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/installer/strata/models', methods=['GET'])
+def strata_models():
+    """The Strata model catalog (for the card's model download selector):
+    display name, family/model, size + bits, and whether a service for it
+    already exists (its volume may already hold the download)."""
+    from loaders.strata import STRATA_MODELS
+    from loaders.base import make_service_key
+    models = []
+    for name, cfg in STRATA_MODELS.items():
+        key = make_service_key('strata', name)
+        models.append({
+            'name': name,
+            'family': cfg['family'],
+            'model': cfg['model'],
+            'size': cfg.get('size', ''),
+            'bits': cfg.get('bits', ''),
+            'service': key in SERVICES,
+        })
+    return jsonify({'success': True, 'models': models})
+
+
+@app.route('/api/installer/strata/download', methods=['POST'])
+def download_strata_model():
+    """Download a Strata model into the volume the service for it would use,
+    WITHOUT leaving a service running (temporary container, stopped as soon as
+    the files are downloaded and verified). Body: {model: display name}."""
+    body = request.get_json(silent=True) or {}
+    job_id, err = installer.start_strata_download_job(body)
+    if err:
+        return jsonify({'success': False, 'message': err}), 409
+    return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
+
 
 @app.route('/api/installer/paiton', methods=['POST'])
 def install_paiton():
@@ -1833,11 +2047,67 @@ def download_paiton():
     return jsonify({'success': True, 'job': job_id, 'log_file': installer.JOBS[job_id]['log_file']})
 
 
+@app.route('/api/installer/paiton/stop', methods=['POST'])
+def stop_paiton_endpoint():
+    """Stop all running Paiton containers."""
+    success, message = installer.stop_paiton()
+    return jsonify({'success': success, 'message': message})
+
+
+@app.route('/api/installer/paiton/restart', methods=['POST'])
+def restart_paiton_endpoint():
+    """Restart all running Paiton containers (stop + start)."""
+    success, message = installer.restart_paiton()
+    return jsonify({'success': success, 'message': message})
+
+
+@app.route('/api/installer/paiton/uninstall', methods=['POST'])
+def uninstall_paiton_endpoint():
+    """Remove all Paiton containers (stopped and running)."""
+    success, message = installer.uninstall_paiton()
+    return jsonify({'success': success, 'message': message})
+
+
+@app.route('/api/installer/paiton/check', methods=['GET'])
+def check_paiton_update_endpoint():
+    """Check for newer Paiton upstream (new commits on the paiton-vllm-plugin
+    repo, compared to the local checkout the install scripts use)."""
+    try:
+        return jsonify(installer.check_paiton_update())
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/installer/paiton/update', methods=['POST'])
+def update_paiton_endpoint():
+    """Apply the Paiton update: git pull --ff-only in the plugin repo
+    (refreshes the launchers; new pinned image releases land as repo commits)."""
+    success, message = installer.update_paiton_repo()
+    return jsonify({'success': success, 'message': message})
+
+
+@app.route('/api/installer/paiton-models')
+def paiton_models():
+    """List the Paiton release models with download status."""
+    PAITON_MODELS = [
+        {'slug': 'qwen38', 'name': 'Qwen3.8 27B', 'bits': '3-bit W3A4 + FP8 draft', 'size': '~66 GB'},
+        {'slug': 'qwen38-mxfp4', 'name': 'Qwen3.8 27B (MXFP4)', 'bits': 'MXFP4 (4-bit)', 'size': '~62 GB'},
+        {'slug': 'gpt-oss-20b', 'name': 'GPT-OSS 20B', 'bits': 'MXFP4 (4-bit)', 'size': '~44 GB'},
+        {'slug': 'minicpm5-2b', 'name': 'MiniCPM5 2B', 'bits': 'W4A16 (4-bit)', 'size': '~40 GB'},
+        {'slug': 'ornith-1.5', 'name': 'Ornith 1.5 35B', 'bits': 'MXFP4 (4-bit)', 'size': '~28 GB'},
+        {'slug': 'qwen3-coder-30b', 'name': 'Qwen3-Coder 30B', 'bits': 'INT4 (4-bit)', 'size': '~30 GB'},
+        {'slug': 'qwen38-neo-coder', 'name': 'Qwen3.8 NEO CODER MAX', 'bits': 'Q4_K_M (4-bit)', 'size': '~25 GB'},
+    ]
+    models = installer.check_model_download_status([dict(m) for m in PAITON_MODELS], kind='paiton')
+    return jsonify({'success': True, 'models': models})
+
+
 @app.route('/api/installer/vllm-models')
 def vllm_models():
     """List the curated vLLM models (safetensors) the user can download."""
     from model_catalog import VLLM_MODELS
-    return jsonify({'success': True, 'models': VLLM_MODELS})
+    models = installer.check_model_download_status([dict(m) for m in VLLM_MODELS], kind='vllm')
+    return jsonify({'success': True, 'models': models})
 
 
 @app.route('/api/installer/vllm-model', methods=['POST'])
@@ -1854,7 +2124,8 @@ def vllm_model():
 def lmstudio_models():
     """List the curated LM Studio models (GGUF) the user can download."""
     from model_catalog import LMSTUDIO_MODELS
-    return jsonify({'success': True, 'models': LMSTUDIO_MODELS})
+    models = installer.check_model_download_status([dict(m) for m in LMSTUDIO_MODELS], kind='lmstudio')
+    return jsonify({'success': True, 'models': models})
 
 
 @app.route('/api/installer/lmstudio-model', methods=['POST'])
@@ -1876,8 +2147,8 @@ def uninstall():
     """
     body = request.get_json(silent=True) or {}
     kind = body.get('kind')
-    if kind not in ('vllm', 'hermes', 'comfyui', 'lmstudio', 'openviking'):
-        return jsonify({'success': False, 'message': 'kind must be vllm, hermes, comfyui, lmstudio, or openviking'}), 400
+    if kind not in ('vllm', 'hermes', 'comfyui', 'lmstudio', 'openviking', 'strata'):
+        return jsonify({'success': False, 'message': 'kind must be vllm, hermes, comfyui, lmstudio, openviking, or strata'}), 400
     job_id, err = installer.start_uninstall_job(kind, body)
     if err:
         return jsonify({'success': False, 'message': err}), 400

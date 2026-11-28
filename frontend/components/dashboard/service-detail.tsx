@@ -248,6 +248,12 @@ export function ServiceDetail({ serviceKey, service, availableGpus = [], onViewL
               <span className="font-mono text-foreground">{loader.name}</span>
             </div>
           )}
+          {service.model && (
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <span>{t('sd.model')}</span>
+              <span className="font-mono text-foreground">{service.model}</span>
+            </div>
+          )}
           {isRunning && (
             <>
               <div className="flex items-center gap-1 text-muted-foreground">

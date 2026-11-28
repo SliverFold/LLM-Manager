@@ -12,6 +12,8 @@ class VllmLoader(Loader):
         {'name': 'tensor_parallel_size', 'label': 'Tensor Parallel Size', 'type': 'int', 'default': 1, 'min': 1, 'max': 16},
         {'name': 'gpu_memory_utilization', 'label': 'GPU VRAM utilization', 'type': 'float', 'default': 0.9, 'min': 0.1, 'max': 1.0, 'step': 0.05},
         {'name': 'max_model_len', 'label': 'Max Context Length (tokens)', 'type': 'int', 'default': 102400, 'min': 256, 'max': 262144},
+        {'name': 'kv_cache', 'label': 'KV Cache Type', 'type': 'select', 'default': 'auto', 'options': ['auto', 'kv4', 'fp8']},
+        {'name': 'kv_cache_memory_bytes', 'label': 'KV Cache Memory (bytes)', 'type': 'int', 'default': 0, 'min': 0, 'max': 10737418240},
         {'name': 'dtype', 'label': 'Data type', 'type': 'select', 'default': 'auto', 'options': ['auto', 'float16', 'bfloat16', 'float32']},
         {'name': 'image', 'label': 'Docker image (if no vllm binary)', 'type': 'select', 'default': '', 'options': []},
     ]
@@ -39,9 +41,18 @@ class VllmLoader(Loader):
         gmu = float(params.get('gpu_memory_utilization') or 0.9)
         mml = int(params.get('max_model_len') or 102400)
         dtype = params.get('dtype') or 'auto'
+        kv_cache = params.get('kv_cache') or 'auto'
+        kv_cache_mb = int(params.get('kv_cache_memory_bytes') or 0)
         log_file = f'/home/{os.getlogin()}/logs/vllm_{key}.log'
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         cuda_devices = ','.join(map(str, gpus))
+
+        # Build KV cache args
+        kv_args = ''
+        if kv_cache and kv_cache != 'auto':
+            kv_args += f' \\\n    --kv-cache-dtype {kv_cache}'
+        if kv_cache_mb > 0:
+            kv_args += f' \\\n    --kv-cache-memory-bytes {kv_cache_mb}'
 
         image = params.get('image') or ''
         if which('vllm'):
@@ -54,7 +65,7 @@ CUDA_VISIBLE_DEVICES={cuda_devices} nohup vllm serve "{model}" \\
     --host 0.0.0.0 \\
     --gpu-memory-utilization {gmu} \\
     --max-model-len {mml} \\
-    --dtype {dtype} \\
+    --dtype {dtype}{kv_args} \\
     > {log_file} 2>&1 &
 echo "vllm {model} starting on port {port} (log: {log_file})"
 """
@@ -78,7 +89,7 @@ docker run -d --name mgr_{key} \\
         --host 0.0.0.0 \\
         --gpu-memory-utilization {gmu} \\
         --max-model-len {mml} \\
-        --dtype {dtype} \\
+        --dtype {dtype}{kv_args} \\
     > {log_file} 2>&1
 echo "vllm {model} starting on port {port} (log: {log_file})"
 """

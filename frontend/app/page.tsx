@@ -153,6 +153,14 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2 mb-6">
               <Server className="h-5 w-5 text-primary" />
               <h2 className="text-xl font-display font-bold text-foreground">{t('page.modelServices')}</h2>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowAddService(true)}
+              >
+                <Plus className="h-3 w-3 mr-1" />
+                {t('page.addService')}
+              </Button>
               <div className="ml-auto flex items-center gap-2">
                 <Button
                   size="sm"
@@ -161,14 +169,6 @@ export default function DashboardPage() {
                 >
                   <Brain className="h-3 w-3 mr-1" />
                   {t('page.huggingface')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setShowAddService(true)}
-                >
-                  <Plus className="h-3 w-3 mr-1" />
-                  {t('page.addService')}
                 </Button>
                 <Button
                   size="sm"
