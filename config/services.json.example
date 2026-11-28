@@ -1,4 +1,17 @@
 {
+    "big": {
+        "name": "Qwen3.8-27B (R9700, paiton vLLM)",
+        "start_script": "/path/to/scripts/mgr_big_start.sh",
+        "stop_script": "/path/to/scripts/mgr_big_stop.sh",
+        "process_pattern": "paiton-qwen38 serve.*--port 8000",
+        "log_file": "/path/to/logs/vllm_big.log",
+        "default_params": {
+            "gpus": [0],
+            "port": 8000,
+            "kv_cache": "fp8"
+        },
+        "loader": "paiton"
+    },
     "qwen3": {
         "name": "Qwen3-Next-80B-A3B-Instruct",
         "model_path": "/root/models/Qwen3-Next-80B-A3B-Instruct",
