@@ -104,9 +104,13 @@ class PaitonLoader(Loader):
     key = 'paiton'
     name = 'Paiton'
     requires_model = True
-    # No loader-wide params (port is the dialog's separate field; model-specific
-    # config like Qwen3.8 weights/mode uses the repo launcher's defaults).
-    param_schema = []
+    # KV cache option for the Qwen3.8 models (the launcher accepts the
+    # --kv-cache flag). The other vLLM options (TP, GPU util, dtype)
+    # don't apply to Paiton (the launchers have their own baked-in defaults — the
+    # dual-card TP setup was dropped 2026-11-23).
+    param_schema = [
+        {'name': 'kv_cache', 'label': 'KV Cache (FP8 / 4-bit)', 'type': 'select', 'default': 'fp8', 'options': ['fp8', 'kv4']},
+    ]
 
     def detect(self):
         repo = _repo()
@@ -149,6 +153,9 @@ class PaitonLoader(Loader):
         log_file = f'/home/{os.getlogin()}/logs/paiton_{key}.log'
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         launcher = os.path.join(repo, 'models', cfg['dir'], cfg['launcher'])
+        # KV cache selection (passed as a --kv-cache flag to the launcher for the
+        # Qwen3.8 models).
+        kv_cache = params.get('kv_cache') or 'fp8'
 
         if cfg['type'] == 'flags':
             # Qwen3.8: the launcher needs the PAITON_* checkpoint/cache dirs set,
@@ -158,6 +165,9 @@ class PaitonLoader(Loader):
             weights_lines = ''.join(
                 f'export {var}="$ROOT/{path}"\n' for var, path in cfg.get('weights', {}).items()
             )
+            extra_flags = ''
+            if kv_cache and kv_cache != 'auto':
+                extra_flags += f' --kv-cache {kv_cache}'
             start = f"""#!/usr/bin/env bash
 set -euo pipefail
 ROOT="{repo}"
@@ -165,7 +175,7 @@ ROOT="{repo}"
 LOG="{log_file}"
 mkdir -p "$(dirname "$LOG")"
 docker rm -f {container} 2>/dev/null || true
-bash "{launcher}" --name {container} --port {port} --detach --compile-cache
+bash "{launcher}" --name {container} --port {port} --detach --compile-cache{extra_flags}
 pkill -f "docker logs -f {container}" 2>/dev/null || true
 nohup docker logs -f {container} >> "$LOG" 2>&1 &
 echo "paiton {model} starting on port {port} (log: $LOG)"
@@ -207,6 +217,7 @@ echo "paiton {model} stopped"
             'default_params': {
                 'gpus': gpus,
                 'port': port,
+                'kv_cache': kv_cache,
             },
         }
         return {'service': service, 'start_script': start_path, 'stop_script': stop_path}

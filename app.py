@@ -458,6 +458,10 @@ def start_service(service_key):
     if dtype not in VALID_DTYPES:
         return jsonify({'success': False, 'message': f'Invalid dtype, must be one of {VALID_DTYPES}'}), 400
 
+    kv_cache = str(data.get('kv_cache', default_params.get('kv_cache', 'fp8')))
+    if kv_cache not in {'auto', 'kv4', 'fp8', 'bf16', 'fp16'}:
+        return jsonify({'success': False, 'message': 'Invalid kv_cache, must be one of auto/kv4/fp8/bf16/fp16'}), 400
+
     parallel_mode = str(data.get('parallelMode', data.get('parallel_mode', default_params.get('parallel_mode', 'tp'))))
     if parallel_mode not in {'tp', 'pp'}:
         return jsonify({'success': False, 'message': 'parallel_mode must be "tp" or "pp"'}), 400
@@ -479,6 +483,14 @@ def start_service(service_key):
             })
             if parallel_mode and (service.get('default_params', {}) or {}).get('parallel_mode') is not None:
                 new_params['parallel_mode'] = parallel_mode
+        # Every loader: persist the dialog's param_schema fields (kv_cache for
+        # paiton/vllm, kv_cache_quant/context_length for lmstudio, kv/context for
+        # strata, ...), so the saved selection shows in the next start dialog.
+        loader = get_loader(loader_key)
+        if loader is not None:
+            for f in loader.param_schema:
+                if f['name'] in data:
+                    new_params[f['name']] = data[f['name']]
         # preserve any loader-specific fields already in default_params (e.g. context_length)
         for k, v in (service.get('default_params', {}) or {}).items():
             if k not in new_params:
@@ -494,6 +506,14 @@ def start_service(service_key):
         cuda_devices = ','.join(map(str, gpus))
         log_file = service.get('log_file', f'/tmp/vllm_{service_key}.log')
         extra_args = service.get('extra_args', '')
+        # KV cache args (the dialog's selection; vLLM's --kv-cache-dtype has no
+        # 4-bit option — auto/fp8/bf16/fp16)
+        kv_args = ''
+        if kv_cache and kv_cache != 'auto':
+            kv_args += f' \\\n    --kv-cache-dtype {kv_cache}'
+        kv_cache_mb = int(data.get('kv_cache_memory_bytes', default_params.get('kv_cache_memory_bytes', 0)) or 0)
+        if kv_cache_mb > 0:
+            kv_args += f' \\\n    --kv-cache-memory-bytes {kv_cache_mb}'
 
         cmd = f'''
 source /root/miniconda3/etc/profile.d/conda.sh 2>/dev/null || true
@@ -505,7 +525,7 @@ CUDA_VISIBLE_DEVICES={cuda_devices} nohup vllm serve {model_path} \
     --host 0.0.0.0 \
     --gpu-memory-utilization {gpu_memory_utilization} \
     --max-model-len {max_model_len} \
-    --dtype {dtype} \
+    --dtype {dtype}{kv_args} \
     {extra_args} \
     > {log_file} 2>&1 &
 echo "Starting service, log: {log_file}"
@@ -540,6 +560,32 @@ echo "Starting service, log: {log_file}"
         if not start_script:
             return jsonify({'success': False, 'message': 'Service config missing model_path or start_script'})
 
+        # Any loader: make the start dialog's parameter choices (KV cache
+        # quantization, context, ...) take effect by regenerating the start
+        # script with the dialog's values (build_service bakes the flags in).
+        # Services without a model field (the hand-written big brain) fall
+        # through to the plain start-script path.
+        if service.get('model'):
+            loader = get_loader(service.get('loader') or 'vllm')
+            if loader is None:
+                return jsonify({'success': False, 'message': f'Loader not found: {service.get("loader")}'}), 500
+            try:
+                schema_names = {f['name'] for f in loader.param_schema}
+                regen = loader.build_service(service_key, service['model'], {
+                    **service.get('default_params', {}),
+                    'port': port,
+                    'gpus': gpus,
+                    **{k: v for k, v in data.items() if k in schema_names},
+                })
+                service['start_script'] = regen['service']['start_script']
+                service['stop_script'] = regen['service']['stop_script']
+                service['default_params'] = regen['service']['default_params']
+                service['generated'] = True
+                save_services_config()
+                start_script = service['start_script']
+            except Exception as e:
+                return jsonify({'success': False, 'message': f'Failed to regenerate {loader.name} start script: {e}'}), 500
+
         try:
             env = os.environ.copy()
             # The manager's own environment (systemd unit) carries PORT=9000/HOST=0.0.0.0
@@ -551,6 +597,8 @@ echo "Starting service, log: {log_file}"
             env.pop('HOST', None)
             env['PARALLEL_MODE'] = parallel_mode
             env['PORT'] = str(port)
+            if service.get('loader') == 'paiton' and not service.get('generated'):
+                env['KV_CACHE'] = kv_cache
             result = subprocess.run(
                 ['bash', start_script],
                 capture_output=True,
@@ -743,6 +791,71 @@ def get_hermes_current():
         return jsonify({'success': True, 'port': int(m.group(1)), 'base_url': base_url})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/hermes/context', methods=['GET'])
+def get_hermes_context():
+    """Return the current Hermes model.context_length (the global context pin)."""
+    try:
+        env = os.environ.copy()
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        result = subprocess.run(
+            ['hermes', 'config', 'get', 'model.context_length'],
+            capture_output=True, text=True, timeout=10, env=env
+        )
+        if result.returncode != 0:
+            return jsonify({'success': False, 'message': f'Failed to read context_length: {result.stderr}'})
+        return jsonify({'success': True, 'context_length': int(result.stdout.strip())})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/hermes/context', methods=['POST'])
+def set_hermes_context():
+    """Force a specific Hermes context_length (overrides auto-detect from the model server).
+
+    Example: POST /api/hermes/context {"context_length": 245000}
+    Set to 0 to restore auto-detect.
+    """
+    data = request.get_json(silent=True) or {}
+    ctx = data.get('context_length')
+    if ctx is None:
+        return jsonify({'success': False, 'message': 'context_length is required'}), 400
+    try:
+        ctx = int(ctx)
+    except (ValueError, TypeError):
+        return jsonify({'success': False, 'message': 'context_length must be an integer'}), 400
+    if not (0 <= ctx <= 262144):
+        return jsonify({'success': False, 'message': 'context_length must be 0-262144'}), 400
+
+    try:
+        env = os.environ.copy()
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        result = subprocess.run(
+            ['hermes', 'config', 'set', 'model.context_length', str(ctx)],
+            capture_output=True, text=True, timeout=10, env=env
+        )
+        if result.returncode != 0:
+            return jsonify({'success': False, 'message': f'Failed to set context_length: {result.stderr}'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+    # Verify it landed
+    try:
+        env = os.environ.copy()
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.expanduser('~/.hermes/hermes-agent/.hermes/bin')
+        verify = subprocess.run(
+            ['hermes', 'config', 'get', 'model.context_length'],
+            capture_output=True, text=True, timeout=10, env=env
+        )
+        if verify.returncode == 0:
+            ctx = int(verify.stdout.strip())
+    except Exception:
+        pass
+
+    return jsonify({
+        'success': True,
+        'message': f'Hermes context_length set to {ctx}',
+        'context_length': ctx
+    })
 
 @app.route('/api/hermes/webapp-link', methods=['GET'])
 def get_hermes_webapp_link():

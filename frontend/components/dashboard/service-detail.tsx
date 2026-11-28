@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Play, Square, FileText, HardDrive, Trash2 } from 'lucide-react';
 import type { ServiceInfo, GPUInfo, StartConfig, ParamSchemaField } from '@/lib/types';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLoaders } from '@/hooks/use-dashboard-data';
 import { toast } from 'sonner';
 import { getApiUrl } from '@/lib/api-config';
@@ -99,7 +99,45 @@ export function ServiceDetail({ serviceKey, service, availableGpus = [], onViewL
   const [isLoading, setIsLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [config, setConfig] = useState<StartConfig | null>(null);
+  const [hermesContext, setHermesContext] = useState<number | null>(null);
+  const [hermesCtxLoading, setHermesCtxLoading] = useState(false);
   const isRunning = service.status === 'running';
+
+  // Load the current Hermes context pin on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/hermes/context'));
+        const data: { success: boolean; context_length?: number } = await res.json();
+        if (data.success) setHermesContext(data.context_length ?? null);
+      } catch (e) {
+        console.error('Failed to load Hermes context', e);
+      }
+    })();
+  }, []);
+
+  const handleSetHermesContext = async () => {
+    if (hermesContext === null) return;
+    setHermesCtxLoading(true);
+    try {
+      const res = await fetch(getApiUrl('/api/hermes/context'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context_length: hermesContext }),
+      });
+      const data: { success: boolean; message?: string; context_length?: number } = await res.json();
+      if (data.success) {
+        toast.success(data.message || 'Hermes context updated');
+        setHermesContext(data.context_length ?? hermesContext);
+      } else {
+        toast.error(data.message || 'Failed to set Hermes context');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to set Hermes context');
+    } finally {
+      setHermesCtxLoading(false);
+    }
+  };
 
   // The service's loader (default to vllm for legacy services without the field)
   const loaderKey = service.loader || 'vllm';
@@ -315,6 +353,31 @@ export function ServiceDetail({ serviceKey, service, availableGpus = [], onViewL
             <Trash2 className="h-3 w-3 mr-1" />
             {t('sd.removeService')}
           </Button>
+        </div>
+
+        <div className="pt-2 border-t border-border/50">
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium">Hermes Context</label>
+            <input
+              type="number"
+              min={0}
+              max={262144}
+              value={hermesContext ?? ''}
+              onChange={(e) => setHermesContext(parseInt(e.target.value) || 0)}
+              className="flex h-9 w-28 rounded-md border border-input bg-transparent px-3 py-1 text-sm font-mono"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSetHermesContext}
+              disabled={hermesCtxLoading || hermesContext === null}
+            >
+              {hermesCtxLoading ? 'Setting…' : 'Set'}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Forces a specific Hermes context window (tokens). 0 = auto-detect from the model server.
+          </p>
         </div>
       </CardContent>
 

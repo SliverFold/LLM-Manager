@@ -25,8 +25,17 @@ if docker ps -aq -f name="$NAME" | grep -q .; then
   log "docker start exit: $?"
 else
   log "No container — fresh start via paiton launcher"
-  log "Running: bash /home/j/Desktop/AI/paiton-qwen38.sh start"
-  bash /home/j/Desktop/AI/paiton-qwen38.sh start 2>&1 | tee -a "$LOG"
+  # KV cache choice from the manager's start dialog (KV_CACHE env var: fp8 or kv4).
+  # kv4 needs --mode long-kv4 (--mode long refuses --kv-cache kv4); the launcher's
+  # --mode flag is last-value-wins, so the extra flag overrides the default long mode.
+  KV="${KV_CACHE:-fp8}"
+  if [ "$KV" = "kv4" ]; then
+    log "KV cache: 4-bit (kv4) — running: bash /home/j/Desktop/AI/paiton-qwen38.sh start --mode long-kv4"
+    bash /home/j/Desktop/AI/paiton-qwen38.sh start --mode long-kv4 2>&1 | tee -a "$LOG"
+  else
+    log "KV cache: FP8 — running: bash /home/j/Desktop/AI/paiton-qwen38.sh start"
+    bash /home/j/Desktop/AI/paiton-qwen38.sh start 2>&1 | tee -a "$LOG"
+  fi
   log "paiton launcher exit: ${PIPESTATUS[0]}"
 fi
 # log follow for the manager's log viewer

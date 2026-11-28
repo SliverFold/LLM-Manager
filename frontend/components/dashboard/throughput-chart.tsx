@@ -32,6 +32,11 @@ interface ThroughputChartProps {
 
 const MAX_POINTS = 60; // ~2 minutes at 2s polling
 
+// Loaders that serve the vLLM-style metrics payload (live/avg tok/s, prefill,
+// TTFT, cache hits): vLLM directly, LM Studio (shaped like it), and Paiton
+// (OpenAI-compatible API, _vllm_metrics_payload in app.py).
+const VLLM_COMPATIBLE = new Set(['vllm', 'lmstudio', 'paiton']);
+
 export function ThroughputChart({ serviceKey, isRunning }: ThroughputChartProps) {
   const { t } = useLang();
   const [history, setHistory] = useState<DataPoint[]>([]);
@@ -71,7 +76,7 @@ export function ThroughputChart({ serviceKey, isRunning }: ThroughputChartProps)
         const data: ServiceMetrics = await res.json();
         if (!cancelled && data.success) {
           setMetrics(data);
-          if (data.loader === 'vllm' || data.loader === 'lmstudio') {
+          if (VLLM_COMPATIBLE.has(data.loader)) {
             const live = data.live_tokens_per_sec ?? 0;
             const avg = data.avg_tokens_per_sec ?? 0;
             const prefill = data.live_prefill ?? 0;
@@ -128,8 +133,8 @@ export function ThroughputChart({ serviceKey, isRunning }: ThroughputChartProps)
 
   const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n.toFixed(0)}`);
 
-  // Non-vLLM loaders: show loaded models + VRAM instead of a throughput chart
-  const isVllm = !metrics || metrics.loader === 'vllm' || metrics.loader === 'lmstudio';
+  // Non-vLLM-compatible loaders: show loaded models + VRAM instead of a throughput chart
+  const isVllm = !metrics || VLLM_COMPATIBLE.has(metrics.loader);
 
   return (
     <div className="bg-card border border-border/50 rounded-xl p-4 flex flex-col">
