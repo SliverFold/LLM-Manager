@@ -29,6 +29,7 @@ VLLM_MODELS = [
     {'slug': 'gemma4-31b',       'name': 'Gemma 4 31B (NVFP4)',   'repo': 'nvidia/Gemma-4-31B-IT-NVFP4',      'size': '~20 GB',  'vram': None},
     {'slug': 'ive-4b',           'name': 'IVE-4B (BF16)',         'repo': 'illuin/IVE-4B',                  'size': '~4.5 GB', 'vram': None},
     {'slug': 'ivonnet-0.8b',     'name': 'Ivonnet-0.8B (BF16)',   'repo': 'illuin/Ivonnet-0.8B',            'size': '~0.9 GB', 'vram': None},
+    {'slug': 'gpt-oss-20b',      'name': 'GPT-OSS 20B (MXFP4)',   'repo': 'openai/gpt-oss-20b',            'size': '~16 GB',  'vram': 16},
 ]
 
 # LM Studio models (GGUF). The Qwen3.8-27B family has 16/24/32 GB versions.
@@ -46,4 +47,5 @@ LMSTUDIO_MODELS = [
     {'slug': 'ive-4b',           'name': 'IVE-4B (Q4_K_M)',             'repo': 'Hansda/IVE-4B-GGUF',              'file': 'IVE-4B-Q4_K_M.gguf',              'size': '~2.2 GB',  'vram': None},
     {'slug': 'ivonnet-0.8b',     'name': 'Ivonnet-0.8B (Q4_K_M)',        'repo': 'Hansda/Ivonnet-0.8B-GGUF',        'file': 'Ivonnet-0.8B-Q4_K_M.gguf',        'size': '~0.4 GB',  'vram': None},
     {'slug': 'inkling2-mini',    'name': 'Inkling 2 Mini (Q4_K_M)',      'repo': 'unsloth/Inkling-2-Mini-GGUF',     'file': 'Inkling-2-Mini-UD-Q4_K_M.gguf',   'size': '~13 GB',   'vram': None},
+    {'slug': 'gpt-oss-20b',      'name': 'GPT-OSS 20B (Q4_K_M)',        'repo': 'unsloth/gpt-oss-20b-GGUF',       'file': 'gpt-oss-20b-Q4_K_M.gguf',         'size': '~11.6 GB', 'vram': 16},
 ]
