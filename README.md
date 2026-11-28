@@ -245,6 +245,8 @@ Services are defined in `config/services.json` (see
 }
 ```
 
+> **Tip:** `process_pattern` is matched with `pgrep -f`, so it must uniquely identify *this* service's process. If two services run the same binary (e.g. two Paiton `paiton-qwen38 serve` instances on different ports), qualify the pattern with the port — `paiton-qwen38 serve.*--port 8000` — so the dashboard doesn't show one service as "running" when the other is the one actually up.
+
 The **Add Service** dialog in the UI generates entries like this for you.
 
 ### Backend API (quick reference)

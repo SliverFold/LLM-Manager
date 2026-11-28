@@ -181,6 +181,8 @@ systemctl --user restart vllm-manager-frontend
 }
 ```
 
+> **提示：** `process_pattern` 用 `pgrep -f` 匹配，必须能唯一识别*本*服务的进程。如果两个服务运行同一个二进制（例如两个 Paiton `paiton-qwen38 serve` 实例在不同端口），请用端口限定模式——`paiton-qwen38 serve.*--port 8000`——否则仪表盘会在另一个服务运行时错误地显示本服务为"运行中"。
+
 界面里的 **添加服务** 对话框会自动生成这样的条目。
 
 ### 后端 API（速查）
