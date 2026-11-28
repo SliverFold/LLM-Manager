@@ -24,13 +24,13 @@ mkdir -p "$DEST"
 if command -v hf >/dev/null 2>&1; then
   HF="hf"
 elif python3 -c 'import huggingface_hub' >/dev/null 2>&1; then
-  HF="python3 -m huggingface_hub"
+  HF="python3 -m huggingface_hub.cli.hf"
 else
   log "No 'hf' on PATH — creating a venv for the download…"
   HF_VENV="$HOME/.cache/paiton-hf-venv"
   python3 -m venv "$HF_VENV" || { log "ERROR: could not create a venv (install python3-venv)"; exit 1; }
   "$HF_VENV/bin/pip" install -q huggingface_hub || { log "ERROR: could not install huggingface_hub in the venv"; exit 1; }
-  HF="$HF_VENV/bin/python -m huggingface_hub"
+  HF="$HF_VENV/bin/python -m huggingface_hub.cli.hf"
 fi
 
 if [ -n "$FILE" ]; then
